@@ -4,799 +4,699 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#dfe9f7">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%227%22 fill=%22%23fff%22 stroke=%22%231e2747%22/%3E%3C/svg%3E">
-<title>SNOW CRAFT - BIG ENTERTAINMENT</title>
+<meta name="theme-color" content="#cfdbe8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%227%22 fill=%22%23d81e1e%22/%3E%3Ccircle cx=%2210%22 cy=%225%22 r=%221.6%22 fill=%22%23fff%22/%3E%3C/svg%3E">
+<title>SnowCraft - BIG ENTERTAINMENT</title>
 <style>
-  html,body{margin:0;padding:0;height:100%;background:#dfe9f7;overflow:hidden;
+  html,body{margin:0;padding:0;height:100%;background:#cfdbe8;overflow:hidden;
     overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
   body{display:flex;align-items:center;justify-content:center;}
-  #game{display:block;image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none;
-    cursor:pointer;background:#fff;box-shadow:0 4px 24px rgba(40,60,110,.25);}
+  #game{display:block;touch-action:none;cursor:default;background:#fff;box-shadow:0 2px 18px rgba(40,60,100,.25);}
 </style>
 </head>
 <body>
-<canvas id="game" width="640" height="440" aria-label="Snow Craft game"></canvas>
-<noscript>Snow Craft needs JavaScript.</noscript>
+<canvas id="game" width="640" height="360" aria-label="SnowCraft game"></canvas>
+<noscript>SnowCraft needs JavaScript.</noscript>
 <script>
 /* ==========================================================================
-   SNOW CRAFT  -  BIG ENTERTAINMENT
-   A tribute to the classic 1998/99 "SnowCraft" snowball fight web game.
-   Single file, no external assets. Everything is drawn in code.
+   SnowCraft  -  BIG ENTERTAINMENT
+   A tribute to the classic 1999 "SnowCraft" holiday snowball-fight game.
+   Single file, no external assets. Everything is drawn in code (canvas gradients).
 
-   CONTROLS (same as the original):
-     * Press & HOLD on one of your green kids -> you grab him. Drag to move him
-       while the throw power charges. RELEASE to throw (diagonally at the red team).
-       Longer hold = farther / higher throw.
-     * Alternative: tap a kid to select him, then press-hold anywhere to aim the
-       throw at that direction (hold = distance), release to throw.
-       A quick tap on your own snow moves the selected kid there.
-   RULES:
-     * Red kids: 1st hit = shake off snow, 2nd hit = knocked down, 3rd hit = KO.
-     * Green kids: 1st hit = stunned ~7s (can't move/throw), 2nd hit = KO.
-     * KO all red kids to clear the level; every level adds another red kid.
-     * Lose when all three green kids are KO'd.
+   HOW TO PLAY (as in the original):
+     * You are the RED team (bottom-right). The GREEN kids (top-left) attack you.
+     * Press & HOLD on one of your red kids: he packs a snowball and the green power
+       bar beside him fills. Drag while holding to move him around your side.
+       RELEASE to throw across the diagonal. Longer hold = farther throw.
+     * Tap / click on the snow to walk the selected kid there.
+     * A kid hit once is knocked down for a moment; hit twice he is out.
+     * Knock out every green kid to reach the next level. More green kids every level.
+     * Game over when all three of your kids are out.
 
-   SKINS: characters are drawn from the SKINS table below. A skin can either use
-   the built-in pixel maps with a custom palette, or supply image sprites per pose
-   (e.g. future "lil foots" NFT art):
-       SnowCraft.setSkin('player', { sprites: { stand:'foot.png', charge:'foot_throw.png', ... },
-                                     spriteHeight: 36 });
-   Poses: stand, walk, charge, throw, sit (stunned), down (knocked down / KO).
-   Missing poses fall back to 'stand', then to the built-in pixel art.
+   SKINS (for future lil foots NFT characters):
+       SnowCraft.setSkin('player', 'red' | 'green' | skinObject)
+       SnowCraft.setSkin('enemy',  ...)
+     A skin object can recolour the built-in kid:
+       { suit:'#d81e1e', boots:'#2b33b8', mitten:'#c01818', face:'#f6dcc0', pants:'#2b33b8' }
+     or supply image sprites per pose (anchored bottom-centre on the kid's feet):
+       { sprites:{ stand:'foot.png', walk:'foot_walk.png', charge:'foot_throw.png',
+                   throw:'foot_throw2.png', sit:'foot_sit.png', down:'foot_ko.png' },
+         spriteHeight: 30 }
+     Missing poses fall back to 'stand', then to the built-in drawn kid.
    ========================================================================== */
 (() => {
 'use strict';
 
-// ---------------------------------------------------------------- constants
-const W = 640, H = 440;           // logical resolution
-const U = 2;                      // size of one "art pixel"
-const PZ = 1.12, EZ = 0.88;       // territory split along the field diagonal
-const DIAG = (() => { const l = Math.hypot(W, H); return { x: -W / l, y: -H / l }; })(); // throw direction
-const CHARGE_TIME = 1.25;         // seconds to full power
-const COOLDOWN = 0.45;            // time to scoop a new snowball
-const PLAYER_STUN = 7.0;          // original: 7-8 seconds of shock
-const SHOW_AIM_HINT = true;       // small landing marker while charging
-
+const W = 640, H = 360;
 const cv = document.getElementById('game');
 const ctx = cv.getContext('2d');
-ctx.imageSmoothingEnabled = false;
+let DPR = 1;
 
 // ---------------------------------------------------------------- skins
-// Palette keys used by the pixel maps:
-//  W pompom  H hat  h hat-shade  S skin  s skin-shade  E eyes  C coat  c coat-shade
-//  M mittens  P pants  p pants-shade  B boots  w snowball  O outline
-const BASE_PAL = { W:'#ffffff', S:'#f7cfa6', s:'#dca67b', E:'#1b1b2a', P:'#3d4a6b', p:'#2b3550',
-                   B:'#4a3020', w:'#ffffff', O:'#1e2747' };
 const SKINS = {
-  green:  { label:'Green Beanies', palette:{ ...BASE_PAL, H:'#2fae52', h:'#1c7a36', C:'#45c466', c:'#279449', M:'#1c7a36' } },
-  red:    { label:'Red Beanies',   palette:{ ...BASE_PAL, H:'#e03a3a', h:'#a11f22', C:'#e65454', c:'#ad3232', M:'#a11f22' } },
-  yellow: { label:'Yellow Kid',    palette:{ ...BASE_PAL, H:'#f2c230', h:'#b88a12', C:'#f5cf45', c:'#c99d1c', M:'#8a5a2b', P:'#7a5230', p:'#5a3a20' } },
-  bigfoot:{ label:'Bigfoot', palette:{ F:'#4a3326', f:'#33221a', L:'#a27a58', E:'#ffffff', K:'#1b1b2a', O:'#1a1210' },
-            maps:null /* filled below */ },
+  red:   { label:'Red Team',   suit:'#d71c1c', mitten:'#c41616', boots:'#2a34b8', pants:'#2a34b8', face:'#f6dcc4' },
+  green: { label:'Green Team', suit:'#1f9a2b', mitten:'#1f9a2b', boots:'#2a34b8', pants:'#3341c4', face:'#f6dcc4' },
 };
 // Which skin each side uses. Swap with SnowCraft.setSkin(team, skinKeyOrObject).
-const TEAMS = { player:'green', enemy:'red' };
+const TEAMS = { player:'red', enemy:'green' };
+const POSES = ['stand', 'walk', 'charge', 'throw', 'sit', 'down'];
 
-// ---------------------------------------------------------------- pixel maps (facing right)
-const LEGS_STAND = ["...PPPPPP...", "...PP..PP...", "...Pp..Pp...", "..BBB..BBB.."];
-const LEGS_WALK  = ["...PPPPPP...", "..PP....PP..", "..Pp....Pp..", ".BBB....BBB."];
-const HEAD = [
-  ".....WW.....",
-  "....HHHH....",
-  "...HHHHHH...",
-  "...hhhhhhh..",
-  "...SSSSES...",
-  "...SSSSSSS..",
-  "....sSSSs...",
-];
-const POSES = {
-  stand: [...HEAD,
-    "...HHHHHHh..",
-    "..CCCCCCCC..",
-    "..CcCCCCCC..",
-    "..McCCCCcM..",
-    "...cCCCCc...", ...LEGS_STAND],
-  walk: [...HEAD,
-    "...HHHHHHh..",
-    "..CCCCCCCC..",
-    "..CcCCCCCC..",
-    "..McCCCCcM..",
-    "...cCCCCc...", ...LEGS_WALK],
-  charge: [
-    "ww...WW.....",
-    "wwM.HHHH....",
-    "..CHHHHHH...",
-    "..Chhhhhhh..",
-    "..CSSSSES...",
-    "..CSSSSSSS..",
-    "..C.sSSSs...",
-    "..CHHHHHHh..",
-    "..CCCCCCCC..",
-    "..CcCCCCCC..",
-    "...cCCCCcM..",
-    "...cCCCCc...", "...PPPPPP...", "..PP...PP...", "..Pp...Pp...", ".BBB....BBB."],
-  throw: [...HEAD,
-    "...HHHHHHh..",
-    "..CCCCCCCCMw",
-    "..CcCCCCCCM.",
-    "..McCCCCc...",
-    "...cCCCCc...", "...PPPPPP...", "..PP...PP...", "..Pp...Pp...", ".BBB...BBB.."],
-  sit: [
-    "............", "............", "............",
-    ".....WW.....",
-    "....HHHH....",
-    "...HHHHHH...",
-    "...hhhhhhh..",
-    "...SSSSES...",
-    "...SSSSSSS..",
-    "....sSSSs...",
-    "...HHHHHHh..",
-    "..CCCCCCCC..",
-    ".MCcCCCCcCM.",
-    "..cCCCCCPPPP",
-    "..PPPPPPPPBB",
-    "........pBBB"],
-  down: [
-    "........CCC.......",
-    ".hHH.SS.CCCCPPPBB.",
-    "WhHHSESCCCCCPPPBB.",
-    ".hHHSSSCCcCCPPPBB.",
-    "........CMM.......",
-  ],
-  // KO: like the original, hat and boots come off
-  ko: [
-    "........CCC.......",
-    "....SSSSCCCCPPPSS.",
-    "...SSESSCCCCPPPSS.",
-    "....SSSSCCcCPPP...",
-    "........CMM.......",
-  ],
-};
-const BIGFOOT = [
-  "....FFFFF.....",
-  "...FFFFFFF....",
-  "..FFfLLLfFF...",
-  "..FFLEKLEKF...",
-  "..FFLLLLLFF...",
-  "..FFfLKLfFF...",
-  "...FFFFFFF....",
-  ".FFFFFFFFFFF..",
-  "FFFFFfffFFFFF.",
-  "FF.FFfffFFF.FF",
-  "FF.FFFFFFFF.FF",
-  "LL.FFFFFFFF.LL",
-  "...FFFFFFFF...",
-  "...FFF..FFF...",
-  "...FFF..FFF...",
-  "...FFF..FFF...",
-  "..LLLL..LLLL..",
-  ".LLLLL..LLLLL.",
-];
-const BIGFOOT_CHEER = [
-  "FF..FFFFF...FF",
-  "FF.FFFFFFF..FF",
-  "FFFFfLLLfFF.FF",
-  ".FFFLEKLEKFFF.",
-  "..FFLLLLLFF...",
-  "..FFfKKKfFF...",
-  "...FFFFFFF....",
-  "..FFFFFFFFF...",
-  "..FFFfffFFF...",
-  "...FFfffFFF...",
-  "...FFFFFFFF...",
-  "...FFFFFFFF...",
-  "...FFFFFFFF...",
-  "...FFF..FFF...",
-  "...FFF..FFF...",
-  "...FFF..FFF...",
-  "..LLLL..LLLL..",
-  ".LLLLL..LLLLL.",
-];
-SKINS.bigfoot.maps = { stand: BIGFOOT, cheer: BIGFOOT_CHEER };
-
-// ---------------------------------------------------------------- sprite building / cache
-const spriteCache = new Map();
-function buildSprite(map, pal, flip) {
-  const h = map.length, w = Math.max(...map.map(r => r.length));
-  const filled = (r, i) => r >= 0 && r < h && i >= 0 && i < w && map[r][i] && map[r][i] !== '.' && pal[map[r][i]];
-  const c = document.createElement('canvas');
-  c.width = (w + 2) * U; c.height = (h + 2) * U;
-  const g = c.getContext('2d');
-  for (let r = -1; r <= h; r++) for (let i = -1; i <= w; i++) {
-    let col = null;
-    if (filled(r, i)) col = pal[map[r][i]];
-    else if (filled(r - 1, i) || filled(r + 1, i) || filled(r, i - 1) || filled(r, i + 1)) col = pal.O || '#1e2747';
-    if (!col) continue;
-    const xx = flip ? (w - 1 - i) : i;
-    g.fillStyle = col; g.fillRect((xx + 1) * U, (r + 1) * U, U, U);
-  }
-  return c;
-}
+function resolveSkin(s) { return (typeof s === 'string' ? SKINS[s] : s) || SKINS.red; }
 const imageCache = new Map();
 function loadImage(src) {
-  if (typeof src !== 'string') return src;            // already an Image/Canvas
+  if (typeof src !== 'string') return src;
   if (!imageCache.has(src)) { const im = new Image(); im.src = src; imageCache.set(src, im); }
   return imageCache.get(src);
 }
-function resolveSkin(s) { return typeof s === 'string' ? SKINS[s] : s; }
-// returns {img, w, h} - anchored at bottom-centre
-function getSprite(skinRef, pose, flip) {
-  const skin = resolveSkin(skinRef) || SKINS.green;
-  if (skin.sprites) {
-    const src = skin.sprites[pose] || skin.sprites.stand;
-    const im = src && loadImage(src);
-    if (im && (im.complete === undefined || im.complete) && (im.naturalWidth || im.width)) {
-      const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
-      const targetH = (skin.spriteHeight || 36) * (pose === 'down' || pose === 'ko' ? 0.5 : pose === 'sit' ? 0.75 : 1);
-      const sc = targetH / ih;
-      return { img: im, w: iw * sc, h: targetH, flip, custom: true };
-    }
-  }
-  const key = (skin._id || (skin._id = 'skin' + Math.random().toString(36).slice(2))) + '|' + pose + '|' + (flip ? 1 : 0);
-  let c = spriteCache.get(key);
-  if (!c) {
-    const map = (skin.maps && (skin.maps[pose] || skin.maps.stand)) || POSES[pose] || POSES.stand;
-    c = buildSprite(map, { ...BASE_PAL, ...(skin.palette || {}) }, flip);
-    spriteCache.set(key, c);
-  }
-  return { img: c, w: c.width, h: c.height, flip };
+
+// colour helpers
+function hexRgb(h) { h = h.replace('#', ''); if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const n = parseInt(h, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function mix(hex, t) { // t>0 lighten toward white, t<0 darken toward black
+  const [r, g, b] = hexRgb(hex);
+  const f = c => Math.round(t >= 0 ? c + (255 - c) * t : c * (1 + t));
+  return `rgb(${f(r)},${f(g)},${f(b)})`;
 }
-function drawSprite(sp, x, y, alpha) {
-  if (alpha !== undefined) ctx.globalAlpha = alpha;
-  if (sp.custom && sp.flip) {
-    ctx.save(); ctx.translate(Math.round(x), 0); ctx.scale(-1, 1);
-    ctx.drawImage(sp.img, Math.round(-sp.w / 2), Math.round(y - sp.h), sp.w, sp.h); ctx.restore();
-  } else ctx.drawImage(sp.img, Math.round(x - sp.w / 2), Math.round(y - sp.h + U), sp.w, sp.h);
-  ctx.globalAlpha = 1;
+const gradCache = new Map();
+function ball3d(x, y, r, col, lx = -0.38, ly = -0.42) { // shaded sphere / ellipse fill style
+  const g = ctx.createRadialGradient(x + r * lx, y + r * ly, r * 0.08, x, y, r * 1.08);
+  g.addColorStop(0, mix(col, 0.55)); g.addColorStop(0.35, mix(col, 0.12));
+  g.addColorStop(0.8, mix(col, -0.28)); g.addColorStop(1, mix(col, -0.5));
+  return g;
 }
+function ell(x, y, rx, ry, rot, fill) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot || 0, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill(); }
 
 // ---------------------------------------------------------------- utils
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
-const zoneV = (x, y) => x / W + y / H;
+const KS = 1.15;                                  // kid draw scale
+const diagV = (x, y) => x / W + y / H;           // 0 = top-left corner, 2 = bottom-right corner
 let uid = 1;
 
-// ---------------------------------------------------------------- sound (tiny WebAudio synth)
-let actx = null, noiseBuf = null, muted = false;
-function audioUnlock() {
-  if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+// ---------------------------------------------------------------- sound (tiny WebAudio)
+let AC = null;
+function audio() { if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { AC = false; } }
+  if (AC && AC.state === 'suspended') AC.resume(); return AC; }
+function noise(dur, f0, f1, vol) {
+  const a = AC; if (!a) return;
   try {
-    actx = new (window.AudioContext || window.webkitAudioContext)();
-    noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.5, actx.sampleRate);
-    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  } catch (e) { actx = null; }
-}
-function tone(type, f0, f1, dur, vol, delay = 0) {
-  const t = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
-  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
-  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
-}
-function noise(dur, freq, vol, type = 'bandpass') {
-  const t = actx.currentTime, s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
-  s.buffer = noiseBuf; f.type = type; f.frequency.value = freq;
-  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  s.connect(f).connect(g).connect(actx.destination); s.start(t); s.stop(t + dur + 0.02);
-}
-function sfx(kind) {
-  if (!actx || muted) return;
-  try {
-    if (kind === 'throw') noise(0.12, 1400, 0.12);
-    else if (kind === 'hit') { noise(0.16, 500, 0.45, 'lowpass'); tone('sine', 160, 60, 0.15, 0.25); }
-    else if (kind === 'splat') noise(0.08, 900, 0.08, 'lowpass');
-    else if (kind === 'ko') { tone('square', 880, 220, 0.4, 0.06); }
-    else if (kind === 'win') [523, 659, 784, 1046].forEach((f, i) => tone('square', f, f, 0.14, 0.05, i * 0.12));
-    else if (kind === 'lose') [392, 330, 262, 196].forEach((f, i) => tone('square', f, f * 0.98, 0.2, 0.05, i * 0.18));
-    else if (kind === 'laugh') [0, 1, 2, 3].forEach(i => tone('square', 520 - i * 20, 380, 0.09, 0.04, i * 0.13));
+    const n = Math.floor(a.sampleRate * dur), buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const s = a.createBufferSource(); s.buffer = buf;
+    const f = a.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(f0, a.currentTime); f.frequency.exponentialRampToValueAtTime(f1, a.currentTime + dur);
+    const g = a.createGain(); g.gain.value = vol;
+    s.connect(f); f.connect(g); g.connect(a.destination); s.start();
   } catch (e) {}
 }
+const sfx = { throw() { noise(0.18, 1800, 600, 0.12); }, hit() { noise(0.16, 500, 150, 0.35); }, splat() { noise(0.1, 900, 300, 0.08); } };
 
-// ---------------------------------------------------------------- field
-const MOUNDS_PLAYER = [ { x: 380, y: 282, rx: 30, ry: 11 }, { x: 488, y: 214, rx: 28, ry: 10 }, { x: 266, y: 352, rx: 26, ry: 10 }, { x: 580, y: 150, rx: 24, ry: 9 } ];
-const MOUNDS = [...MOUNDS_PLAYER, ...MOUNDS_PLAYER.map(m => ({ x: W - m.x, y: H - m.y, rx: m.rx, ry: m.ry }))]
-  .map(m => ({ ...m, h: 15 }));
-const PLAYER_START = [ { x: 410, y: 318 }, { x: 520, y: 252 }, { x: 300, y: 392 } ];
-
-let bgCanvas = null;
+// ---------------------------------------------------------------- background (soft shaded snowfield)
+const bg = document.createElement('canvas');
 function buildBackground() {
-  bgCanvas = document.createElement('canvas'); bgCanvas.width = W; bgCanvas.height = H;
-  const g = bgCanvas.getContext('2d');
-  const grd = g.createLinearGradient(0, 0, W, H);
-  grd.addColorStop(0, '#eef4fd'); grd.addColorStop(0.5, '#fbfdff'); grd.addColorStop(1, '#eef4fd');
-  g.fillStyle = grd; g.fillRect(0, 0, W, H);
-  // soft drifts
-  for (let i = 0; i < 26; i++) {
-    const x = rand(0, W), y = rand(0, H), rx = rand(40, 120), ry = rx * 0.28;
-    g.fillStyle = 'rgba(205,220,242,0.16)'; g.beginPath(); g.ellipse(x, y + 3, rx, ry, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = 'rgba(255,255,255,0.6)'; g.beginPath(); g.ellipse(x - 4, y, rx * 0.9, ry * 0.8, 0, 0, Math.PI * 2); g.fill();
+  const s = 2; bg.width = W * s; bg.height = H * s;
+  const b = bg.getContext('2d'); b.scale(s, s);
+  b.fillStyle = '#ffffff'; b.fillRect(0, 0, W, H);
+  let g = b.createRadialGradient(W * 0.47, H * 0.42, 60, W * 0.5, H * 0.45, W * 0.66);
+  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.55, 'rgba(236,242,249,0.55)');
+  g.addColorStop(0.82, 'rgba(206,220,236,0.9)'); g.addColorStop(1, 'rgba(176,195,218,1)');
+  b.fillStyle = g; b.fillRect(0, 0, W, H);
+  // cooler shading in the bottom corners and along the top edge, like the original
+  g = b.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, 'rgba(190,206,226,0.35)'); g.addColorStop(0.12, 'rgba(255,255,255,0)');
+  g.addColorStop(0.8, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(165,186,214,0.6)');
+  b.fillStyle = g; b.fillRect(0, 0, W, H);
+  // faint drifts
+  for (let i = 0; i < 14; i++) {
+    const x = rand(0, W), y = rand(0, H), r = rand(40, 110);
+    const dg = b.createRadialGradient(x, y, 2, x, y, r);
+    dg.addColorStop(0, 'rgba(255,255,255,0.5)'); dg.addColorStop(1, 'rgba(255,255,255,0)');
+    b.fillStyle = dg; b.beginPath(); b.ellipse(x, y, r, r * 0.45, 0, 0, Math.PI * 2); b.fill();
   }
-  // pixel sparkle / speckles
-  for (let i = 0; i < 900; i++) {
-    g.fillStyle = Math.random() < 0.75 ? 'rgba(170,192,225,0.35)' : 'rgba(255,255,255,0.95)';
-    g.fillRect(Math.floor(rand(0, W / U)) * U, Math.floor(rand(0, H / U)) * U, U, U);
+}
+
+// ---------------------------------------------------------------- forts (crescent snow walls)
+// Each fort is a thick, smooth horseshoe of packed snow, convex side facing the enemy.
+const FORT_DEFS = [
+  { cx: 192, cy: 110, rx: 37, ry: 19, a0: 168, a1: -20, owner: 'enemy' },   // green fort, opens up (towards greens)
+  { cx: 432, cy: 236, rx: 37, ry: 19, a0: 192, a1: 380, owner: 'player' },  // red fort, opens down (towards reds)
+];
+let forts = [];
+function buildForts() {
+  forts = FORT_DEFS.map(d => {
+    const pts = [], n = 70, ph1 = rand(0, 6), ph2 = rand(0, 6);
+    for (let i = 0; i <= n; i++) {
+      const u = i / n, a = (d.a0 + (d.a1 - d.a0) * u) * Math.PI / 180;
+      const r = 5.5 + 11 * Math.pow(Math.sin(Math.PI * u), 0.6) + 1.3 * Math.sin(u * 11 + ph1) + 0.8 * Math.sin(u * 23 + ph2);
+      pts.push({ x: d.cx + Math.cos(a) * d.rx, y: d.cy + Math.sin(a) * d.ry, r: Math.max(3.5, r) });
+    }
+    const blobs = pts.filter((_, i) => i % 3 === 0);   // coarse list for collisions
+    const s = 3, pad = 24;
+    const minX = d.cx - d.rx - pad, maxX = d.cx + d.rx + pad + 12, minY = d.cy - d.ry - pad - 12, maxY = d.cy + d.ry + pad;
+    const cw = Math.ceil((maxX - minX) * s), ch = Math.ceil((maxY - minY) * s);
+    const layer = (fn) => { const c = document.createElement('canvas'); c.width = cw; c.height = ch; const g = c.getContext('2d');
+      g.scale(s, s); g.translate(-minX, -minY); fn(g); return c; };
+    const dots = (g, col, dx, dy, k, lift) => { g.fillStyle = col; pts.forEach(p => { g.beginPath();
+      g.ellipse(p.x + dx, p.y - p.r * lift + dy, p.r * k, p.r * k * 0.9, 0, 0, Math.PI * 2); g.fill(); }); };
+    const out = document.createElement('canvas'); out.width = cw; out.height = ch; const o = out.getContext('2d');
+    const comp = (c, blur, alpha) => { o.save(); o.globalAlpha = alpha == null ? 1 : alpha; if (blur) o.filter = `blur(${blur * s}px)`; o.drawImage(c, 0, 0); o.restore(); };
+    // cast shadow (light from the upper-left)
+    comp(layer(g => { g.fillStyle = '#7d92ad'; pts.forEach(p => { g.beginPath(); g.ellipse(p.x + 8, p.y + 1.5, p.r * 1.15, p.r * 0.6, 0, 0, Math.PI * 2); g.fill(); }); }), 3, 0.25);
+    // concave inside of the horseshoe
+    comp(layer(g => { const hg = g.createRadialGradient(d.cx, d.cy, 2, d.cx, d.cy, d.rx * 0.9);
+      hg.addColorStop(0, 'rgba(160,190,222,0.5)'); hg.addColorStop(1, 'rgba(160,190,222,0)');
+      g.fillStyle = hg; g.beginPath(); g.ellipse(d.cx, d.cy, d.rx * 0.9, d.ry * 0.9, 0, 0, Math.PI * 2); g.fill(); }), 2);
+    comp(layer(g => dots(g, '#6d95c0', 1.4, 1.6, 1.0, 0.45)), 0.4);        // dark rim (shadow side)
+    comp(layer(g => dots(g, '#bcd5eb', 0, 0, 0.93, 0.5)), 0.8);            // body
+    comp(layer(g => dots(g, '#f2f7fc', -1.8, -1.6, 0.64, 0.62)), 1.6);     // lit top
+    comp(layer(g => dots(g, '#ffffff', -2.2, -2, 0.38, 0.8)), 1.4, 0.95);  // highlight
+    // a few crumbs of loose snow at the base
+    o.save(); o.scale(s, s); o.translate(-minX, -minY);
+    for (let i = 0; i < 7; i++) { const p = pts[Math.floor(rand(0, pts.length))];
+      const x = p.x + rand(-p.r, p.r), y = p.y + rand(1, 4), r = rand(1, 2.2);
+      const gr = o.createRadialGradient(x - r * 0.4, y - r * 0.4, 0.2, x, y, r); gr.addColorStop(0, '#fff'); gr.addColorStop(1, '#9fbfdc');
+      o.fillStyle = gr; o.beginPath(); o.arc(x, y, r, 0, Math.PI * 2); o.fill(); }
+    o.restore();
+    return { ...d, blobs, img: out, ox: minX, oy: minY, s, y: d.cy };
+  });
+}
+function fortBlocks(x, y, z) {
+  for (const f of forts) for (const b of f.blobs) {
+    const dx = x - b.x, dy = (y - b.y) * 1.6;
+    if (dx * dx + dy * dy < b.r * b.r && z < b.r * 1.5) return true;
   }
-  // trampled no-man's land along the diagonal
-  for (let i = 0; i < 160; i++) {
-    const t = Math.random(), x = W * (1 - t) + rand(-30, 30), y = H * t + rand(-20, 20);
-    g.fillStyle = 'rgba(160,185,220,0.22)';
-    g.fillRect(Math.floor(x / U) * U, Math.floor(y / U) * U, U * 2, U);
+  return false;
+}
+function pushOutOfForts(k) {
+  for (const f of forts) for (const b of f.blobs) {
+    const dx = k.x - b.x, dy = (k.y - b.y) * 1.6, rr = b.r + 4, d = Math.hypot(dx, dy);
+    if (d < rr && d > 0.01) { k.x = b.x + dx / d * rr; k.y = b.y + dy / d * rr / 1.6; }
   }
 }
 
 // ---------------------------------------------------------------- game state
-let state = 'title', stateT = 0, level = 1, score = 0, best = 0;
-try { best = +localStorage.getItem('snowcraft_best') || 0; } catch (e) {}
-let kids = [], balls = [], parts = [], splats = [], selected = null, bannerT = 0, endTimer = -1, time = 0;
-const spectators = [
-  { kind: 'bigfoot', x: 44, y: 420, jump: 0 },
-  { kind: 'yellow', x: 612, y: 96, jump: 0, face: -1 },
-];
+let state = 'title';          // title | play | clear | lost | over
+let stateT = 0, level = 1, score = 0;
+let best = +(localStorage.getItem('snowcraft_best') || 0);
+let kids = [], balls = [], parts = [], decals = [];
+let selected = null, drag = null;
+let bannerText = '', bannerT = 0, fade = 0, fadeDir = 0, onFaded = null;
+let enemyQueue = 0, spawnT = 0, levelT = 0;
+let pointer = { x: -99, y: -99, touch: false };
 
-function makeKid(team, x, y) {
-  return { id: uid++, team, x, y, hits: 0, state: 'idle', t: 0, cool: 0, charge: 0, charging: false,
-           walkTo: null, moving: false, face: team === 'player' ? -1 : 1, anim: rand(0, 1),
-           ai: { t: rand(0.6, 2.2), chargeFor: 0.7 }, laugh: 0 };
-}
-function inMound(x, y, pad = 0) {
-  return MOUNDS.some(m => ((x - m.x) / (m.rx + pad)) ** 2 + ((y - m.y) / (m.ry + pad * 0.6)) ** 2 < 1);
-}
-function clampTeam(team, x, y) {
-  x = clamp(x, 14, W - 14); y = clamp(y, 66, H - 8);
-  const gx = 1 / W, gy = 1 / H, g2 = gx * gx + gy * gy, v = zoneV(x, y);
-  if (team === 'player' && v < PZ) { const d = PZ - v; x += gx * d / g2; y += gy * d / g2; }
-  if (team === 'enemy' && v > EZ) { const d = v - EZ; x -= gx * d / g2; y -= gy * d / g2; }
-  x = clamp(x, 14, W - 14); y = clamp(y, 66, H - 8);
-  for (const m of MOUNDS) {
-    let dx = (x - m.x) / (m.rx + 7), dy = (y - m.y) / (m.ry + 5); let d = Math.hypot(dx, dy);
-    if (d < 1) { if (d < 1e-4) { dy = 1; d = 1; } x = m.x + dx / d * (m.rx + 7); y = m.y + dy / d * (m.ry + 5); }
-  }
-  return [x, y];
-}
-function randomSpot(team, near, radius) {
-  for (let i = 0; i < 60; i++) {
-    const x = near ? near.x + rand(-radius, radius) : rand(26, W - 26);
-    const y = near ? near.y + rand(-radius, radius) * 0.7 : rand(76, H - 16);
-    if (x < 20 || x > W - 20 || y < 76 || y > H - 12) continue;
-    const v = zoneV(x, y);
-    const ok = team === 'enemy' ? (v < EZ - 0.03 && v > 0.16) : (v > PZ + 0.03);
-    if (ok && !inMound(x, y, 8)) return { x, y };
-  }
-  return team === 'enemy' ? { x: 130, y: 150 } : { x: 510, y: 330 };
-}
-function enemyCount(lv) { return Math.min(3 + (lv - 1), 14); }
-
-function setupLevel(lv) {
-  kids = []; balls = []; parts = []; splats = []; endTimer = -1;
-  for (const p of PLAYER_START) kids.push(makeKid('player', p.x, p.y));
-  const n = enemyCount(lv);
-  for (let i = 0; i < n; i++) {
-    let s, tries = 0;
-    do { s = randomSpot('enemy'); tries++; }
-    while (tries < 80 && kids.some(k => k.team === 'enemy' && Math.hypot(k.x - s.x, k.y - s.y) < 40));
-    kids.push(makeKid('enemy', s.x, s.y));
-  }
-  selected = kids[0];
-  bannerT = 1.6;
-}
-function startGame() { level = 1; score = 0; setupLevel(1); setState('play'); }
-function setState(s) { state = s; stateT = 0; }
 const players = () => kids.filter(k => k.team === 'player');
 const enemies = () => kids.filter(k => k.team === 'enemy');
-const alive = k => k.state !== 'ko';
-const controllable = k => k && (k.state === 'idle' || k.state === 'throw');
+const alive = k => k.state !== 'down';
+const usable = k => k.state !== 'down' && k.state !== 'sit';
+
+function makeKid(team, x, y, tx, ty) {
+  return { id: uid++, team, x, y, tx, ty, state: 'walk', hits: 0, power: 0, t: 0, anim: rand(0, 6),
+           aiT: rand(1.5, 3), hitT: 0, snowT: 0, jump: 0, aimX: 0, aimY: 0, aimP: 0 };
+}
+
+const RED_HOME = [[468, 250], [586, 238], [528, 318]];
+const GREEN_HOME = [[86, 58], [190, 52], [70, 114], [130, 152], [250, 40], [40, 190], [140, 92], [205, 170], [22, 62]];
+
+function setupLevel(n) {
+  kids = []; balls = []; parts = []; decals = []; selected = null; drag = null; levelT = 0;
+  RED_HOME.forEach(([x, y], i) => kids.push(makeKid('player', x + 120 + i * 10, y + 120, x, y)));
+  const total = Math.min(2 + n, 9);
+  const first = Math.min(3, total);
+  for (let i = 0; i < first; i++) { const [x, y] = GREEN_HOME[i]; kids.push(makeKid('enemy', x - 110, y - 90, x, y)); }
+  enemyQueue = total - first; spawnT = 5;
+  selected = players()[0];
+}
+function spawnEnemy() {
+  const i = Math.floor(rand(0, GREEN_HOME.length)); const [x, y] = GREEN_HOME[i];
+  const fromTop = Math.random() < 0.5;
+  const k = makeKid('enemy', fromTop ? x + rand(-20, 20) : -20, fromTop ? -20 : y + rand(-20, 20), x + rand(-10, 10), y + rand(-8, 8));
+  k.aiT = rand(2, 3.5); kids.push(k);
+}
+
+function startGame() {
+  audio(); level = 1; score = 0;
+  if (state !== 'title') setupLevel(1);
+  state = 'play'; stateT = 0; bannerText = ''; bannerT = 0;
+}
+function setState(s) { state = s; stateT = 0; }
+function fadeTo(cb) { fadeDir = 1; onFaded = cb; }
+
+// ---------------------------------------------------------------- zones
+function zoneLimit(team) {
+  if (team === 'player') return 0.93;                                 // reds may come up to just past the middle
+  return Math.min(0.88, 0.6 + levelT * 0.009 + level * 0.03);         // greens creep forward as time passes
+}
+function clampZone(team, x, y) {
+  x = clamp(x, 12, W - 12); y = clamp(y, 34, H - 8);
+  const v = diagV(x, y), lim = zoneLimit(team);
+  if (team === 'player' && v < lim) { const a = (lim - v) / 2; x += a * W; y += a * H; }
+  if (team === 'enemy' && v > lim) { const a = (lim - v) / 2; x += a * W; y += a * H; }
+  return [clamp(x, 12, W - 12), clamp(y, 34, H - 8)];
+}
 
 // ---------------------------------------------------------------- throwing
-function throwBall(k, dx, dy, power, distOverride) {
-  const dist = distOverride !== undefined ? distOverride : 40 + power * 560;
-  const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n;
-  if (Math.abs(dx) > 0.05) k.face = dx < 0 ? -1 : 1;
-  const sx = k.x + k.face * 7, sy = k.y - 1;
-  balls.push({ sx, sy, tx: sx + dx * dist, ty: sy + dy * dist, x: sx, y: sy, h: 24, u: 0,
-               T: 0.4 + dist / 650, peak: 8 + dist * 0.2, team: k.team, owner: k });
-  k.state = 'throw'; k.t = 0; k.cool = COOLDOWN; k.charge = 0; k.charging = false;
-  sfx('throw');
-}
-function kidHeight(k) { return k.state === 'down' ? 9 : k.state === 'stunned' ? 22 : 30; }
-
-function puff(x, y, h, n, spread = 60) {
-  for (let i = 0; i < n; i++)
-    parts.push({ x, y, h, vx: rand(-spread, spread), vy: rand(-spread, spread) * 0.5, vh: rand(20, 90), life: rand(0.35, 0.7) });
-}
-function hitKid(k, b) {
-  puff(k.x, k.y, b.h, 10);
-  sfx('hit');
-  if (state !== 'play') { if (k.state === 'idle') { k.state = 'hit'; k.t = 0; } return; } // attract mode
-  k.hits++;
-  if (k.team === 'enemy') {
-    score += 10 * level;
-    if (k.hits >= 3) ko(k);
-    else { k.state = k.hits === 2 ? 'down' : 'hit'; k.t = 0; k.charging = false; k.charge = 0; k.walkTo = null; }
-  } else {
-    if (ptr.kid === k) ptr.mode = null;
-    k.charging = false; k.charge = 0; k.walkTo = null;
-    if (k.hits >= 2) ko(k); else { k.state = 'stunned'; k.t = 0; }
+const DIAG = (() => { const l = Math.hypot(W, H); return [-W / l, -H / l]; })();
+function throwBall(k, power, tx, ty) {
+  const sx = k.x + (k.team === 'player' ? -5 : 6), sy = k.y - 2;
+  let ex, ey;
+  if (tx !== undefined) { ex = tx; ey = ty; }
+  else {
+    const dist = 55 + power * 470;
+    let dir = k.team === 'player' ? DIAG : [-DIAG[0], -DIAG[1]];
+    // gentle aim assist: snap toward the enemy closest to the throw line (within ~22 degrees)
+    let bestA = 0.38, bestDir = null;
+    kids.forEach(o => {
+      if (o.team === k.team || !alive(o)) return;
+      const dx = o.x - k.x, dy = o.y - k.y, l = Math.hypot(dx, dy) || 1;
+      const a = Math.acos(clamp((dx * dir[0] + dy * dir[1]) / l, -1, 1));
+      if (a < bestA) { bestA = a; bestDir = [dx / l, dy / l]; }
+    });
+    if (bestDir) dir = bestDir;
+    ex = sx + dir[0] * dist; ey = sy + dir[1] * dist;
   }
+  const d = Math.hypot(ex - sx, ey - sy);
+  balls.push({ team: k.team, owner: k.id, sx, sy, ex, ey, x: sx, y: sy, z: 22, z0: 22, t: 0,
+               T: 0.38 + d / 430, h: 8 + d * 0.13 });
+  sfx.throw();
+}
+
+function hitKid(k, b) {
+  for (let i = 0; i < 9; i++) parts.push({ x: k.x, y: k.y, z: 18, vx: rand(-40, 40), vy: rand(-20, 20), vz: rand(10, 70), r: rand(1, 2.4), life: rand(0.4, 0.8), t: 0 });
+  k.hits++; k.hitT = 0.35; k.snowT = 3; sfx.hit();
+  if (k.team === 'enemy') score += 1;
+  if (k.hits >= 2) ko(k);
+  else { k.state = 'sit'; k.t = k.team === 'player' ? 2.6 : 2.2; k.tx = null; if (drag && drag.k === k) drag = null; }
 }
 function ko(k) {
-  k.state = 'ko'; k.t = 0; k.charging = false; k.walkTo = null;
-  k.hatX = k.x + rand(-22, 22); k.hatY = k.y + rand(4, 12);
-  sfx('ko');
-  if (k.team === 'enemy') { score += 50 * level; spectators.forEach(s => s.jump = 1.0); }
-  if (selected === k) selected = players().find(p => alive(p) && p !== k) || null;
+  k.state = 'down'; k.t = 0; k.tx = null; k.hits = Math.max(k.hits, 2);
+  if (k.team === 'enemy') score += 2;
+  if (drag && drag.k === k) drag = null;
+  const skin = resolveSkin(TEAMS[k.team]);
+  // mittens and boots fly off, like the original knockout
+  const items = [['mitten', skin.mitten], ['mitten', skin.mitten], ['boot', skin.boots], ['boot', skin.boots], ['hat', skin.suit]];
+  items.forEach(([type, col]) => decals.push({ type, col, x: k.x, y: k.y, z: type === 'hat' ? 20 : 8,
+    vx: rand(-45, 45) + (k.team === 'enemy' ? -10 : 10), vy: rand(-25, 25), vz: rand(40, 90), rot: rand(0, 6), vr: rand(-8, 8), t: 0 }));
+  if (selected === k) selected = players().find(usable) || null;
 }
-
-// ---------------------------------------------------------------- input
-const ptr = { mode: null, kid: null, x: 0, y: 0, sx: 0, sy: 0, t0: 0, moved: 0, offX: 0, offY: 0, id: null };
-function toLogical(e) {
-  const r = cv.getBoundingClientRect();
-  return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height];
-}
-function pickPlayerKid(x, y) {
-  let best = null, bd = 1e9;
-  for (const k of players()) {
-    if (!alive(k)) continue;
-    const dx = x - k.x, dy = y - (k.y - 16);
-    if (Math.abs(dx) < 18 && dy > -26 && dy < 24) { const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = k; } }
-  }
-  return best;
-}
-function onDown(e) {
-  e.preventDefault();
-  audioUnlock();
-  const [x, y] = toLogical(e);
-  ptr.x = ptr.sx = x; ptr.y = ptr.sy = y; ptr.t0 = performance.now(); ptr.moved = 0; ptr.mode = null; ptr.kid = null;
-  ptr.id = e.pointerId;
-  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
-  if (state === 'title') { startGame(); return; }
-  if (state === 'win') { if (stateT > 0.6) { level++; setupLevel(level); setState('play'); } return; }
-  if (state === 'lose') { if (stateT > 0.8) startGame(); return; }
-  if (state !== 'play' || endTimer >= 0) return;
-  const k = pickPlayerKid(x, y);
-  if (k) {
-    selected = k;
-    if (controllable(k)) {
-      ptr.mode = 'grab'; ptr.kid = k; k.charging = true; k.charge = 0; k.walkTo = null;
-      ptr.offX = k.x - x; ptr.offY = k.y - y;
-    }
-  } else if (controllable(selected)) {
-    ptr.mode = 'aim'; ptr.kid = selected; selected.charging = true; selected.charge = 0;
-  }
-}
-function onMove(e) {
-  if (ptr.id !== null && e.pointerId !== ptr.id) return;
-  const [x, y] = toLogical(e);
-  ptr.x = x; ptr.y = y; ptr.moved = Math.max(ptr.moved, Math.hypot(x - ptr.sx, y - ptr.sy));
-  const k = ptr.kid;
-  if (ptr.mode === 'grab' && k && controllable(k) && ptr.moved > 4) {
-    const [cx, cy] = clampTeam('player', x + ptr.offX, y + ptr.offY); k.walkTo = { x: cx, y: cy };
-  }
-}
-function onUp(e) {
-  if (ptr.id !== null && e.pointerId !== ptr.id) return;
-  ptr.id = null;
-  const k = ptr.kid, mode = ptr.mode; ptr.mode = null; ptr.kid = null;
-  if (!k || state !== 'play' || !mode) return;
-  if (!controllable(k) || !k.charging) { k.charging = false; k.charge = 0; return; }
-  const held = (performance.now() - ptr.t0) / 1000;
-  const tap = held < 0.17 && ptr.moved < 8;
-  if (mode === 'grab') {
-    if (tap || k.cool > 0) { k.charging = false; k.charge = 0; return; }   // tap = just select
-    throwBall(k, DIAG.x, DIAG.y, k.charge);
-  } else {
-    if (tap) { k.charging = false; k.charge = 0; const [cx, cy] = clampTeam('player', ptr.x, ptr.y); k.walkTo = { x: cx, y: cy }; return; }
-    if (k.cool > 0) { k.charging = false; k.charge = 0; return; }
-    throwBall(k, ptr.x - k.x, ptr.y - k.y, k.charge);
-  }
-}
-cv.addEventListener('pointerdown', onDown);
-cv.addEventListener('pointermove', onMove);
-cv.addEventListener('pointerup', onUp);
-cv.addEventListener('pointercancel', onUp);
-cv.addEventListener('contextmenu', e => e.preventDefault());
-document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
-window.addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M') muted = !muted; });
 
 // ---------------------------------------------------------------- update
-function updateKid(k, dt) {
-  k.t += dt; k.anim += dt; k.cool = Math.max(0, k.cool - dt); k.laugh = Math.max(0, k.laugh - dt);
-  switch (k.state) {
-    case 'stunned': if (k.t > PLAYER_STUN) { k.state = 'idle'; k.t = 0; } break;
-    case 'hit':     if (k.t > 1.0) { k.state = 'idle'; k.t = 0; } break;
-    case 'down':    if (k.t > 2.6) { k.state = 'idle'; k.t = 0; } break;
-    case 'throw':   if (k.t > 0.25) { k.state = 'idle'; k.t = 0; } break;
+function update(dt) {
+  stateT += dt;
+  if (bannerT > 0) bannerT -= dt;
+  if (fadeDir) {
+    fade += fadeDir * dt * 2.2;
+    if (fade >= 1 && fadeDir > 0) { fade = 1; fadeDir = -1; const cb = onFaded; onFaded = null; cb && cb(); }
+    if (fade <= 0 && fadeDir < 0) { fade = 0; fadeDir = 0; }
   }
-  if (k.state === 'ko') return;
-  if (k.charging && k.cool <= 0 && controllable(k)) k.charge = Math.min(1, k.charge + dt / (k.team === 'player' ? CHARGE_TIME : 1));
-  k.moving = false;
-  if (k.walkTo && controllable(k)) {
-    const sp = k.team === 'player' ? 100 : Math.min(42 + level * 4, 85);
-    const dx = k.walkTo.x - k.x, dy = k.walkTo.y - k.y, d = Math.hypot(dx, dy);
-    if (d < 1.5) k.walkTo = null;
-    else {
-      const st = Math.min(d, sp * dt);
-      const [nx, ny] = clampTeam(k.team, k.x + dx / d * st, k.y + dy / d * st);
-      if (Math.hypot(nx - k.x, ny - k.y) < st * 0.2) k.walkTo = null;  // stuck
-      k.x = nx; k.y = ny; k.moving = true;
-      if (!k.charging && Math.abs(dx) > 2) k.face = dx < 0 ? -1 : 1;
+  const playing = state === 'play';
+  if (playing) levelT += dt;
+
+  // spawn reinforcements from the top-left corner
+  if (playing && enemyQueue > 0) { spawnT -= dt; if (spawnT <= 0) { spawnEnemy(); enemyQueue--; spawnT = rand(4.5, 7) / (1 + level * 0.08); } }
+
+  for (const k of kids) {
+    k.anim += dt; if (k.hitT > 0) k.hitT -= dt; if (k.snowT > 0) k.snowT -= dt;
+    if (k.state === 'down') { k.t += dt; continue; }
+    if (k.state === 'sit') { k.t -= dt; if (k.t <= 0) { k.state = 'idle'; k.aiT = rand(0.8, 1.6); } continue; }
+    if (k.state === 'throw') { k.t -= dt; if (k.t <= 0) k.state = 'idle'; }
+    // cheering
+    if ((state === 'lost' && k.team === 'enemy') || (state === 'clear' && k.team === 'player')) { k.jump += dt; k.state = 'cheer'; continue; }
+    // movement
+    if (k.tx != null) {
+      const dx = k.tx - k.x, dy = k.ty - k.y, d = Math.hypot(dx, dy);
+      const sp = (k.team === 'player' ? (k.state === 'charge' ? 95 : 80) : 48 + level * 2);
+      if (d < 1.5) { k.x = k.tx; k.y = k.ty; k.tx = null; if (k.state === 'walk') k.state = 'idle'; }
+      else { const m = Math.min(d, sp * dt); k.x += dx / d * m; k.y += dy / d * m; if (k.state === 'idle') k.state = 'walk'; }
+      if (k.x > 0 && k.y > 0 && k.x < W && k.y < H) pushOutOfForts(k);
+    } else if (k.state === 'walk') k.state = 'idle';
+    // charging
+    if (k.state === 'charge') {
+      if (k.team === 'player') k.power = Math.min(1, k.power + dt * 0.85);
+      else { k.t -= dt; if (k.t <= 0) { throwBall(k, 0, k.aimX, k.aimY); k.state = 'throw'; k.t = 0.3; k.aiT = rand(1.4, 3.2) / (1 + level * 0.12); } }
     }
+    // enemy AI
+    if (k.team === 'enemy' && playing && (k.state === 'idle' || k.state === 'walk') && k.tx == null) {
+      k.aiT -= dt;
+      if (k.aiT <= 0) {
+        const targets = players().filter(alive);
+        if (targets.length && Math.random() < 0.7) {
+          const tg = targets[Math.floor(Math.random() * targets.length)];
+          const err = Math.max(8, 34 - level * 4);
+          // lead the target a little if he is walking
+          let px = tg.x, py = tg.y;
+          if (tg.tx != null) { const d = Math.hypot(tg.tx - tg.x, tg.ty - tg.y) || 1; px += (tg.tx - tg.x) / d * 25; py += (tg.ty - tg.y) / d * 25; }
+          k.aimX = px + rand(-err, err); k.aimY = py + rand(-err, err) * 0.7;
+          k.state = 'charge'; k.t = rand(0.7, 1.1); k.power = 0;
+        } else {
+          const lim = zoneLimit('enemy');
+          for (let tries = 0; tries < 8; tries++) {
+            const x = rand(14, W * 0.62), y = rand(36, H * 0.75);
+            if (diagV(x, y) <= lim && diagV(x, y) > lim - 0.32) { [k.tx, k.ty] = clampZone('enemy', x, y); break; }
+          }
+          k.aiT = rand(0.6, 1.6);
+        }
+      }
+    }
+  }
+
+  // balls
+  for (let i = balls.length - 1; i >= 0; i--) {
+    const b = balls[i]; b.t += dt; const u = Math.min(1, b.t / b.T);
+    b.x = b.sx + (b.ex - b.sx) * u; b.y = b.sy + (b.ey - b.sy) * u;
+    b.z = b.z0 * (1 - u) + 4 * b.h * u * (1 - u);
+    let gone = false;
+    for (const k of kids) {
+      if (k.team === b.team || !alive(k)) continue;
+      const dx = k.x - b.x, dy = (k.y - b.y) * 1.5, hgt = k.state === 'sit' ? 23 : 33;
+      if (dx * dx + dy * dy < 100 && b.z < hgt) { hitKid(k, b); gone = true; break; }
+    }
+    if (!gone && u > 0.15 && fortBlocks(b.x, b.y, b.z)) { puff(b.x, b.y, b.z); sfx.splat(); gone = true; }
+    if (!gone && u >= 1) { decals.push({ type: 'splat', x: b.x, y: b.y, t: 0 }); puff(b.x, b.y, 1, 4); gone = true; }
+    if (gone) balls.splice(i, 1);
+  }
+  // particles
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]; p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vz -= 220 * dt; p.z = Math.max(0, p.z + p.vz * dt);
+    if (p.t > p.life) parts.splice(i, 1);
+  }
+  for (let i = decals.length - 1; i >= 0; i--) {
+    const d = decals[i]; d.t += dt;
+    if (d.type === 'splat') { if (d.t > 4) decals.splice(i, 1); continue; }
+    if (d.z > 0 || d.vz > 0) { d.x += d.vx * dt; d.y += d.vy * dt; d.vz -= 260 * dt; d.z += d.vz * dt; d.rot += d.vr * dt;
+      if (d.z <= 0) { d.z = 0; d.vz = 0; d.vx = d.vy = d.vr = 0; } }
+  }
+
+  // round flow
+  if (state === 'play') {
+    if (players().every(k => !alive(k))) { setState('lost'); drag = null; }
+    else if (enemyQueue === 0 && enemies().every(k => !alive(k))) { setState('clear'); drag = null;
+      score += players().filter(alive).length * 2; }
+    if (selected && !usable(selected)) { const n = players().find(usable); if (n) selected = n; }
+  } else if (state === 'clear' && stateT > 2.4 && !fadeDir && !onFaded) {
+    fadeTo(() => { level++; setupLevel(level); setState('play'); bannerText = 'Level ' + level; bannerT = 2.6; });
+  } else if (state === 'lost' && stateT > 3.2 && !fadeDir && !onFaded) {
+    fadeTo(() => { setState('over'); if (score > best) { best = score; try { localStorage.setItem('snowcraft_best', best); } catch (e) {} } });
   }
 }
-function enemyAI(k, dt, attract) {
-  if (!controllable(k)) return;
-  const targets = kids.filter(p => p.team !== k.team && alive(p));
-  if (!targets.length) return;
-  const ai = k.ai;
-  if (k.charging) {
-    if (k.charge >= ai.chargeFor && k.cool <= 0) {
-      const stunned = targets.filter(p => p.state === 'stunned' || p.state === 'down');
-      const tg = (stunned.length && Math.random() < 0.5) ? stunned[0] : targets[Math.floor(Math.random() * targets.length)];
-      const acc = attract ? 0.25 : Math.max(0.07, 0.2 - 0.015 * level);
-      let dx = tg.x - k.x, dy = tg.y - k.y;
-      if (!attract && level >= 3 && tg.walkTo && tg.moving) { // lead moving targets a little
-        const lx = tg.walkTo.x - tg.x, ly = tg.walkTo.y - tg.y, ld = Math.hypot(lx, ly) || 1;
-        const lead = Math.min(ld, 60) * Math.min(1, (level - 2) * 0.25); dx += lx / ld * lead; dy += ly / ld * lead;
-      }
-      const dist = Math.hypot(dx, dy) * (1 + rand(-acc, acc));
-      const ang = Math.atan2(dy, dx) + rand(-1, 1) * Math.max(0.025, 0.11 - 0.01 * level);
-      throwBall(k, Math.cos(ang), Math.sin(ang), 0, dist);
-    }
+function puff(x, y, z, n = 7) {
+  for (let i = 0; i < n; i++) parts.push({ x, y, z, vx: rand(-30, 30), vy: rand(-14, 14), vz: rand(10, 60), r: rand(0.8, 2), life: rand(0.3, 0.6), t: 0 });
+}
+
+// ---------------------------------------------------------------- drawing kids
+function kidPose(k) {
+  if (k.state === 'down') return 'down';
+  if (k.state === 'sit') return 'sit';
+  if (k.state === 'charge') return 'charge';
+  if (k.state === 'throw') return 'throw';
+  if (k.state === 'walk' || k.tx != null) return 'walk';
+  return 'stand';
+}
+function drawShadow(x, y, pose) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(KS, KS);
+  ctx.fillStyle = 'rgba(105,122,148,0.22)';
+  ctx.beginPath();
+  if (pose === 'down') ctx.ellipse(6, 1, 15, 5, -0.2, 0, Math.PI * 2);
+  else if (pose === 'sit') ctx.ellipse(8, -1, 12, 5, -0.35, 0, Math.PI * 2);
+  else ctx.ellipse(10, -3, 13, 5.5, -0.4, 0, Math.PI * 2);
+  ctx.fill(); ctx.restore();
+}
+function trySprite(skin, pose, k) {
+  if (!skin.sprites) return false;
+  const src = skin.sprites[pose] || skin.sprites.stand; const im = src && loadImage(src);
+  if (!im || (im.complete === false) || !(im.naturalWidth || im.width)) return false;
+  const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+  const th = (skin.spriteHeight || 30) * (pose === 'down' && !skin.sprites.down ? 0.5 : pose === 'sit' && !skin.sprites.sit ? 0.75 : 1);
+  const tw = iw * th / ih;
+  ctx.save(); ctx.translate(k.x, k.y);
+  if (pose === 'down' && !skin.sprites.down) ctx.rotate(-Math.PI / 2);
+  if (skin.flip && k.team === 'player') ctx.scale(-1, 1);
+  ctx.drawImage(im, -tw / 2, -th, tw, th); ctx.restore();
+  return true;
+}
+function drawKid(k) {
+  const skin = resolveSkin(TEAMS[k.team]);
+  const pose = kidPose(k);
+  const front = k.team === 'enemy';     // greens face the camera, reds are seen from behind
+  let x = k.x, y = k.y;
+  if (k.hitT > 0) x += Math.sin(k.hitT * 60) * 1.5;
+  const jy = k.state === 'cheer' ? -Math.abs(Math.sin(k.jump * 7)) * 7 : 0;
+  drawShadow(k.x, k.y, pose);
+  if (trySprite(skin, pose, { x, y: y + jy, team: k.team })) return;
+  ctx.save(); ctx.translate(x, y + jy); ctx.scale(KS, KS);
+  if (pose === 'down') drawLying(skin, front, k);
+  else if (pose === 'sit') drawSitting(skin, front, k);
+  else drawStanding(skin, front, pose, k);
+  ctx.restore();
+}
+function boot(x, y, col, rot) { ell(x, y, 3.6, 2.4, rot || 0, ball3d(x, y, 3.6, col)); }
+function mitten(x, y, col, r = 2.4) { ell(x, y, r, r * 0.9, 0, ball3d(x, y, r, col)); }
+function head(x, y, r, skin, front, bare) {
+  if (bare) { // hat knocked off: pale round head
+    ell(x, y, r * 0.86, r * 0.86, 0, ball3d(x, y, r * 0.86, '#f3dcc8'));
     return;
   }
-  ai.t -= dt;
-  if (ai.t > 0) return;
-  const n = kids.filter(e => e.team === k.team && alive(e)).length;
-  const pace = Math.pow(Math.max(1, n) / 3, 0.8) * Math.max(0.6, 1 - 0.05 * (level - 1));
-  if (k.cool <= 0 && Math.random() < 0.62) {
-    k.charging = true; k.charge = 0; ai.chargeFor = rand(0.45, 1.0); k.walkTo = null;
+  ell(x, y, r, r, 0, ball3d(x, y, r, skin.suit));
+  if (front) {
+    const fx = x + r * 0.22, fy = y + r * 0.22;
+    const fg = ctx.createRadialGradient(fx - 1.5, fy - 1.8, 0.5, fx, fy, r * 0.75);
+    fg.addColorStop(0, '#fff3e6'); fg.addColorStop(0.6, skin.face || '#f6dcc4'); fg.addColorStop(1, '#d9a985');
+    ell(fx, fy, r * 0.66, r * 0.6, 0, fg);
+    // beanie brim over the forehead
+    ctx.beginPath(); ctx.ellipse(fx, fy - r * 0.48, r * 0.78, r * 0.3, 0.08, 0, Math.PI * 2);
+    ctx.fillStyle = ball3d(fx, fy - r * 0.5, r * 0.8, skin.suit); ctx.fill();
+    // eyes, cheeks, mouth
+    ctx.fillStyle = '#20202a';
+    ell(fx - r * 0.2, fy - r * 0.02, r * 0.1, r * 0.13, 0, '#20202a');
+    ell(fx + r * 0.25, fy - r * 0.02, r * 0.1, r * 0.13, 0, '#20202a');
+    ell(fx - r * 0.38, fy + r * 0.22, r * 0.13, r * 0.08, 0, 'rgba(240,120,110,0.45)');
+    ell(fx + r * 0.45, fy + r * 0.22, r * 0.13, r * 0.08, 0, 'rgba(240,120,110,0.45)');
+    ctx.strokeStyle = '#8a4a3a'; ctx.lineWidth = 0.6;
+    ctx.beginPath(); ctx.arc(fx + r * 0.03, fy + r * 0.22, r * 0.14, 0.2, Math.PI - 0.2); ctx.stroke();
   } else {
-    k.walkTo = randomSpot(k.team, k, 110);
-  }
-  ai.t = rand(1.1, 2.6) * pace;
-}
-function updateBalls(dt) {
-  const STEPS = 4;
-  outer: for (let i = balls.length - 1; i >= 0; i--) {
-    const b = balls[i];
-    for (let s = 0; s < STEPS; s++) {
-      b.u += dt / STEPS / b.T;
-      if (b.u >= 1) {
-        splats.push({ x: b.tx, y: b.ty, life: 5, r: rand(3, 5) }); puff(b.tx, b.ty, 1, 6, 40); sfx('splat');
-        balls.splice(i, 1); continue outer;
-      }
-      b.x = b.sx + (b.tx - b.sx) * b.u; b.y = b.sy + (b.ty - b.sy) * b.u;
-      b.h = 24 * (1 - b.u) + b.peak * 4 * b.u * (1 - b.u);
-      for (const m of MOUNDS) {
-        if (((b.x - m.x) / m.rx) ** 2 + ((b.y - m.y) / m.ry) ** 2 < 1 && b.h < m.h && b.u > 0.08) {
-          puff(b.x, b.y, b.h, 8, 50); sfx('splat'); balls.splice(i, 1); continue outer;
-        }
-      }
-      for (const k of kids) {
-        if (k.team === b.team || !alive(k)) continue;
-        if (Math.abs(b.x - k.x) < 9 && Math.abs(b.y - k.y) < 7 && b.h < kidHeight(k)) {
-          hitKid(k, b); balls.splice(i, 1); continue outer;
-        }
-      }
-    }
-    if (b.x < -60 || b.x > W + 60 || b.y < -60 || b.y > H + 60) balls.splice(i, 1);
+    // back of the hood: glossy highlight
+    ell(x + r * 0.35, y - r * 0.5, r * 0.24, r * 0.2, -0.4, 'rgba(255,255,255,0.92)');
   }
 }
-function update(dt) {
-  time += dt; stateT += dt;
-  if (bannerT > 0) bannerT -= dt;
-  const attract = state === 'title';
-  if (state === 'play' || attract) {
-    for (const k of kids) updateKid(k, dt);
-    for (const k of kids) {
-      if (k.team === 'enemy' || (attract && k.team === 'player')) enemyAI(k, dt, attract);
-    }
-    updateBalls(dt);
-  } else if (state === 'lose') {
-    for (const k of kids) if (k.team === 'enemy' && alive(k)) { k.laugh = 1; }
-  }
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vh -= 300 * dt; p.h = Math.max(0, p.h + p.vh * dt);
-    if (p.life <= 0) parts.splice(i, 1);
-  }
-  for (let i = splats.length - 1; i >= 0; i--) { splats[i].life -= dt; if (splats[i].life <= 0) splats.splice(i, 1); }
-  for (const s of spectators) s.jump = Math.max(0, s.jump - dt);
-
-  if (state === 'play') {
-    if (selected && !alive(selected)) selected = players().find(alive) || null;
-    if (endTimer < 0) {
-      if (!enemies().some(alive)) { endTimer = 1.2; }
-      else if (!players().some(alive)) { endTimer = 1.4; sfx('laugh'); }
+function snowOnHead(x, y, r) {
+  ell(x - r * 0.2, y - r * 0.75, r * 0.55, r * 0.32, -0.2, ball3d(x, y - r * 0.75, r * 0.55, '#f4f8ff'));
+  ell(x + r * 0.35, y - r * 0.55, r * 0.3, r * 0.22, 0.3, '#ffffff');
+}
+function drawStanding(skin, front, pose, k) {
+  const walk = pose === 'walk';
+  const ph = k.anim * 13, bob = walk ? Math.abs(Math.sin(ph)) * -1.2 : 0;
+  const lf = walk ? Math.sin(ph) * 1.6 : 0;
+  const cheer = k.state === 'cheer';
+  // boots
+  boot(-3.6, -1.6 - Math.max(0, lf), skin.boots); boot(3.6, -1.6 - Math.max(0, -lf), skin.boots);
+  ell(0, -4.6 + bob, 5.2, 3.2, 0, ball3d(0, -4.6 + bob, 5.2, skin.pants));
+  const by = -11 + bob;
+  // far arm (behind body)
+  const side = front ? 1 : -1;                // which side the throwing arm is on
+  if (cheer) { ell(-6, by - 7, 2.6, 4.5, 0.4, ball3d(-6, by - 7, 4, skin.suit)); mitten(-8, by - 11, skin.mitten); }
+  // body
+  ell(0, by, 7.4, 7.6, 0, ball3d(0, by, 7.6, skin.suit));
+  // arms
+  const armY = by + 0.5;
+  if (cheer) { ell(6, by - 7, 2.6, 4.5, -0.4, ball3d(6, by - 7, 4, skin.suit)); mitten(8, by - 11, skin.mitten); }
+  else {
+    // non-throwing arm
+    ell(-side * 6.6, armY, 2.8, 4.6, side * 0.35, ball3d(-side * 6.6, armY, 4.6, skin.suit)); mitten(-side * 7.6, armY + 4, skin.mitten);
+    if (pose === 'charge') {
+      const p = k.team === 'player' ? k.power : 0.6;
+      const ax = side * (6 + p), ay = by - 6 - p * 2;
+      ell(ax, ay, 2.6, 4.6, -side * 0.6, ball3d(ax, ay, 4.6, skin.suit));
+      mitten(ax + side * 2, ay - 4, skin.mitten);
+      ell(ax + side * 2.4, ay - 6.5, 2.7, 2.7, 0, ball3d(ax + side * 2.4, ay - 6.5, 2.7, '#ffffff'));
+    } else if (pose === 'throw') {
+      const fx = front ? 7.5 : -7.5; // arm swung forward toward the enemy
+      ell(fx * 0.8, by - 2, 2.6, 4.6, front ? -1.1 : 1.1, ball3d(fx * 0.8, by - 2, 4.6, skin.suit)); mitten(fx * 1.2, by - 3, skin.mitten);
     } else {
-      endTimer -= dt;
-      if (endTimer <= 0) {
-        endTimer = -1;
-        if (!enemies().some(alive)) { score += 100 * level; setState('win'); sfx('win'); }
-        else { setState('lose'); sfx('lose'); }
-        if (score > best) { best = score; try { localStorage.setItem('snowcraft_best', best); } catch (e) {} }
-      }
+      ell(side * 6.6, armY, 2.8, 4.6, -side * 0.35, ball3d(side * 6.6, armY, 4.6, skin.suit)); mitten(side * 7.6, armY + 4, skin.mitten);
     }
   }
+  const hy = by - 10.5;
+  head(0, hy, 8.2, skin, front, false);
+  if (k.snowT > 0) snowOnHead(0, hy, 8.2);
+}
+function drawSitting(skin, front, k) {
+  const f = front ? 1 : -1;
+  boot(f * 6 - 3.5, -1.5, skin.boots, 0.3); boot(f * 6 + 3.5, -0.5, skin.boots, -0.3);
+  ell(f * 2, -3.5, 6, 3.4, 0, ball3d(f * 2, -3.5, 6, skin.pants));
+  ell(0, -8, 7.6, 6.6, 0, ball3d(0, -8, 7.6, skin.suit));
+  ell(-6.8, -5.5, 2.6, 4, 0.9, ball3d(-6.8, -5.5, 4, skin.suit)); mitten(-9, -3, skin.mitten);
+  ell(6.8, -5.5, 2.6, 4, -0.9, ball3d(6.8, -5.5, 4, skin.suit)); mitten(9, -3, skin.mitten);
+  const wob = Math.sin(k.anim * 6) * 0.8;
+  head(wob, -17, 8.2, skin, front, false);
+  snowOnHead(wob, -17, 8.2);
+  // dizzy snowflakes circling
+  for (let i = 0; i < 3; i++) {
+    const a = k.anim * 4 + i * 2.1;
+    ell(Math.cos(a) * 9, -27 + Math.sin(a) * 2.5, 1.2, 1.2, 0, 'rgba(150,185,225,0.9)');
+  }
+}
+function drawLying(skin, front, k) {
+  // flat on his back, hat/mittens/boots knocked off (see decals)
+  const s = k.team === 'enemy' ? 1 : -1;   // greens fall back toward the top-left, reds toward bottom-right
+  const t = Math.min(1, k.t / 0.25);
+  ctx.rotate(s * -0.15 * t);
+  ell(s * 7, -3, 4.2, 3.6, 0, ball3d(s * 7, -3, 4.2, skin.pants));           // legs
+  ell(s * 9.5, -6.5, 2.4, 2.2, 0, ball3d(s * 9.5, -6.5, 2.4, '#f3dcc8'));     // socks up
+  ell(0, -4, 7.8, 5.4, 0, ball3d(0, -4, 7.8, skin.suit));                     // body
+  ell(-s * 2, -9, 2.4, 3.6, s * 1.2, ball3d(-s * 2, -9, 3.6, skin.suit));     // arm flung up
+  head(-s * 9, -5, 7.4, skin, true, true);
+  // dazed face on the bare head
+  ctx.fillStyle = '#4a3a3a';
+  ell(-s * 9 - 1.8, -4.5, 0.7, 0.7, 0, '#4a3a3a'); ell(-s * 9 + 1.8, -4.5, 0.7, 0.7, 0, '#4a3a3a');
+}
+function drawDecal(d) {
+  if (d.type === 'splat') {
+    const a = Math.max(0, 1 - d.t / 4);
+    ell(d.x, d.y, 4, 1.8, 0, `rgba(200,218,236,${0.7 * a})`); ell(d.x - 0.5, d.y - 0.4, 3, 1.2, 0, `rgba(255,255,255,${a})`);
+    return;
+  }
+  const y = d.y - d.z;
+  if (d.z > 0) ell(d.x + 2, d.y, 2.5, 1.1, 0, 'rgba(100,120,150,0.25)');
+  ctx.save(); ctx.translate(d.x, y); ctx.rotate(d.rot);
+  if (d.type === 'mitten') { ell(0, 0, 3, 2.2, 0, ball3d(0, 0, 3, d.col)); ell(2.2, -1.6, 1.1, 1, 0, ball3d(2.2, -1.6, 1.2, d.col)); }
+  else if (d.type === 'boot') { ell(0, 0, 2.2, 3.2, 0.2, ball3d(0, 0, 3.2, d.col)); ell(1.4, 2.4, 2.6, 1.6, 0, ball3d(1.4, 2.4, 2.6, d.col)); }
+  else if (d.type === 'hat') { ctx.beginPath(); ctx.ellipse(0, 0, 4.6, 3.6, 0, Math.PI, 0); ctx.closePath(); ctx.fillStyle = ball3d(0, -1, 4.6, d.col); ctx.fill(); }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- HUD bits
+function drawRing(k) {
+  const x = k.x, y = k.y - 1;
+  ctx.save(); ctx.strokeStyle = 'rgba(40,104,160,0.9)'; ctx.lineWidth = 1.1;
+  ctx.beginPath(); ctx.ellipse(x, y, 15, 6.5, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = 'rgba(40,104,160,0.9)';
+  [[0, -1], [0, 1], [-1, 0], [1, 0]].forEach(([dx, dy]) => {
+    const px = x + dx * 15, py = y + dy * 6.5;
+    ctx.beginPath(); ctx.moveTo(px + dx * 3, py + dy * 2.2); ctx.lineTo(px - dy * 2, py + dx * 1.6); ctx.lineTo(px + dy * 2, py - dx * 1.6); ctx.closePath(); ctx.fill();
+  });
+  ctx.restore();
+}
+function drawPowerBar(k) {
+  const segs = 7, x = k.x + 14, y0 = k.y - 6;
+  const n = Math.ceil(k.power * segs);
+  for (let i = 0; i < segs; i++) {
+    const y = y0 - i * 3.2;
+    ctx.fillStyle = i < n ? '#27c22c' : 'rgba(39,194,44,0.15)';
+    ctx.fillRect(x, y - 2.2, 5, 2.2);
+  }
+}
+function serifText(txt, x, y, size, alpha) {
+  ctx.save(); ctx.globalAlpha = alpha; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `${size}px "Times New Roman", Times, Georgia, serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.fillText(txt, x + 1, y + 1);
+  ctx.fillStyle = '#a3bfd8'; ctx.fillText(txt, x, y); ctx.restore();
 }
 
 // ---------------------------------------------------------------- render
-function shadow(x, y, rx, ry, a = 0.22) {
-  ctx.fillStyle = `rgba(80,110,165,${a})`; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
-}
-function drawMound(m) {
-  shadow(m.x + 5, m.y + 4, m.rx + 2, m.ry + 3, 0.18);
-  ctx.fillStyle = '#c9daf0'; ctx.beginPath(); ctx.ellipse(m.x, m.y - 4, m.rx, m.ry + 6, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#eef4fd'; ctx.beginPath(); ctx.ellipse(m.x - 2, m.y - 7, m.rx - 3, m.ry + 3, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(m.x - 6, m.y - 10, m.rx * 0.6, m.ry * 0.6, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = 'rgba(120,150,200,0.55)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(m.x, m.y - 4, m.rx, m.ry + 6, 0, 0.1, Math.PI - 0.1); ctx.stroke();
-}
-function drawKid(k) {
-  const skin = TEAMS[k.team === 'player' ? 'player' : 'enemy'];
-  const flip = k.face < 0;
-  let pose = 'stand', ox = 0, oy = 0, alpha;
-  if (k.state === 'ko') { pose = 'ko'; alpha = 0.92; }
-  else if (k.state === 'down') pose = 'down';
-  else if (k.state === 'stunned') pose = 'sit';
-  else if (k.state === 'hit') { pose = 'stand'; ox = Math.sin(k.t * 50) * 1.5; }
-  else if (k.charging && k.cool <= 0) pose = 'charge';
-  else if (k.state === 'throw') pose = 'throw';
-  else if (k.moving) pose = (Math.floor(k.anim * 7) % 2) ? 'walk' : 'stand';
-  if (k.laugh > 0 || (state === 'lose' && k.team === 'enemy' && alive(k))) oy = -Math.abs(Math.sin(time * 9 + k.id)) * 4;
-
-  const lying = pose === 'down' || pose === 'ko';
-  shadow(k.x, k.y, lying ? 18 : 10, lying ? 5 : 4);
-  if (k.state === 'ko') { // hat that flew off
-    const hc = (resolveSkin(skin).palette || {}).H || '#888';
-    ctx.fillStyle = '#1e2747'; ctx.fillRect(Math.round(k.hatX) - 5, Math.round(k.hatY) - 5, 10, 6);
-    ctx.fillStyle = hc; ctx.fillRect(Math.round(k.hatX) - 4, Math.round(k.hatY) - 4, 8, 4);
-    ctx.fillStyle = '#fff'; ctx.fillRect(Math.round(k.hatX) - 1, Math.round(k.hatY) - 6, 2, 2);
-  }
-  const sp = getSprite(skin, pose, flip);
-  drawSprite(sp, k.x + ox, k.y + oy + (lying ? 2 : 0), alpha);
-  // snow stuck on clothes = damage indicator
-  if (k.hits > 0 && !lying) {
-    ctx.fillStyle = '#ffffff';
-    const by = k.y + oy - (pose === 'sit' ? 10 : 18);
-    ctx.fillRect(Math.round(k.x - 4), Math.round(by), 4, 2);
-    if (k.hits > 1) ctx.fillRect(Math.round(k.x + 2), Math.round(by + 4), 2, 2);
-  }
-  // dizzy stars
-  if (k.state === 'stunned' || k.state === 'down' || (k.state === 'ko' && k.t < 3)) {
-    const cy = k.y - (k.state === 'stunned' ? 30 : 14);
-    for (let i = 0; i < 3; i++) {
-      const a = time * 4 + i * 2.1;
-      ctx.fillStyle = i % 2 ? '#f5c518' : '#7fb2ff';
-      ctx.fillRect(Math.round(k.x + Math.cos(a) * 9) - 1, Math.round(cy + Math.sin(a) * 3) - 1, 3, 3);
-    }
-  }
-  if (k.laugh > 0 || (state === 'lose' && k.team === 'enemy' && alive(k))) {
-    ctx.font = 'bold 9px monospace'; ctx.fillStyle = '#a11f22'; ctx.textAlign = 'center';
-    if (Math.floor(time * 3 + k.id) % 2) ctx.fillText('HA', k.x, k.y - 38 + oy);
-  }
-}
-function drawSelection(k) {
-  ctx.save();
-  ctx.strokeStyle = '#1c7a36'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.lineDashOffset = -time * 12;
-  ctx.beginPath(); ctx.ellipse(k.x, k.y, 14, 6, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
-}
-function drawPower(k) {
-  const x = Math.round(k.x - 12), y = Math.round(k.y - 46);
-  ctx.fillStyle = '#1e2747'; ctx.fillRect(x - 1, y - 1, 26, 6);
-  ctx.fillStyle = '#dfe9f7'; ctx.fillRect(x, y, 24, 4);
-  const p = k.charge;
-  ctx.fillStyle = p < 0.5 ? '#45c466' : p < 0.85 ? '#f2c230' : '#e03a3a';
-  ctx.fillRect(x, y, Math.round(24 * p), 4);
-  if (SHOW_AIM_HINT && ptr.kid === k) {
-    let dx = DIAG.x, dy = DIAG.y;
-    if (ptr.mode === 'aim') { dx = ptr.x - k.x; dy = ptr.y - k.y; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n; }
-    const d = 40 + p * 560, tx = k.x + k.face * 7 + dx * d, ty = k.y + dy * d;
-    ctx.strokeStyle = 'rgba(30,39,71,0.6)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.ellipse(tx, ty, 7, 3, 0, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(tx - 4, ty - 3); ctx.lineTo(tx + 4, ty + 3); ctx.moveTo(tx + 4, ty - 3); ctx.lineTo(tx - 4, ty + 3); ctx.stroke();
-  }
-}
-function drawSpectator(s) {
-  const j = s.jump > 0 ? -Math.abs(Math.sin(s.jump * 12)) * 7 : 0;
-  shadow(s.x, s.y, s.kind === 'bigfoot' ? 14 : 10, 4);
-  if (s.kind === 'bigfoot') drawSprite(getSprite('bigfoot', s.jump > 0 ? 'cheer' : 'stand', false), s.x, s.y + j);
-  else drawSprite(getSprite('yellow', s.jump > 0 ? 'throw' : 'stand', true), s.x, s.y + j);
-}
-function drawBall(b) {
-  ctx.fillStyle = '#1e2747'; ctx.fillRect(Math.round(b.x) - 3, Math.round(b.y - b.h) - 3, 6, 6);
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.round(b.x) - 2, Math.round(b.y - b.h) - 3, 4, 6);
-  ctx.fillRect(Math.round(b.x) - 3, Math.round(b.y - b.h) - 2, 6, 4);
-  ctx.fillStyle = '#c9daf0'; ctx.fillRect(Math.round(b.x), Math.round(b.y - b.h), 2, 2);
-}
-function text(str, x, y, size, fill, stroke, align = 'center', weight = 'bold', family = '"Trebuchet MS", Verdana, sans-serif') {
-  ctx.font = `${weight} ${size}px ${family}`; ctx.textAlign = align; ctx.textBaseline = 'middle';
-  if (stroke) { ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(3, size / 6); ctx.strokeStyle = stroke; ctx.strokeText(str, x, y); }
-  ctx.fillStyle = fill; ctx.fillText(str, x, y);
-}
-function drawHeads(team, n, total, x, y, dir) {
-  const sk = resolveSkin(TEAMS[team]).palette || {};
-  for (let i = 0; i < total; i++) {
-    const xx = x + dir * i * 11;
-    ctx.fillStyle = '#1e2747'; ctx.fillRect(xx - 1, y - 1, 10, 10);
-    ctx.fillStyle = i < n ? (sk.H || '#888') : '#c9d3e3'; ctx.fillRect(xx, y, 8, 4);
-    ctx.fillStyle = i < n ? (sk.S || '#f7cfa6') : '#dfe5ee'; ctx.fillRect(xx, y + 4, 8, 4);
-  }
-}
-function drawHUD() {
-  text('LEVEL ' + level, 12, 16, 14, '#1e2747', 'rgba(255,255,255,0.9)', 'left');
-  text('SCORE ' + String(score).padStart(5, '0'), 86, 16, 14, '#1e2747', 'rgba(255,255,255,0.9)', 'left');
-  text('BIG ENTERTAINMENT', W - 12, 16, 11, '#a11f22', 'rgba(255,255,255,0.9)', 'right');
-  const pl = players(), en = enemies();
-  drawHeads('player', pl.filter(alive).length, pl.length, W - 34, H - 18, 1);
-  drawHeads('enemy', en.filter(alive).length, en.length, 12, 30, 1);
-}
-function panel(y, h) {
-  ctx.fillStyle = 'rgba(255,255,255,0.82)'; ctx.fillRect(0, y, W, h);
-  ctx.fillStyle = 'rgba(30,39,71,0.85)'; ctx.fillRect(0, y, W, 2); ctx.fillRect(0, y + h - 2, W, 2);
-}
-function drawTitle() {
-  panel(110, 200);
-  text('BIG ENTERTAINMENT', W / 2, 140, 22, '#a11f22', '#ffffff');
-  text('presents', W / 2, 162, 12, '#1e2747', null, 'center', 'italic');
-  // icy title
-  ctx.font = 'bold 66px "Arial Black", Impact, "Trebuchet MS", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round'; ctx.lineWidth = 10; ctx.strokeStyle = '#1e2747'; ctx.strokeText('SNOW CRAFT', W / 2, 214);
-  const gr = ctx.createLinearGradient(0, 186, 0, 244); gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.55, '#d6e7ff'); gr.addColorStop(1, '#7fb2ff');
-  ctx.fillStyle = gr; ctx.fillText('SNOW CRAFT', W / 2, 214);
-  ctx.fillStyle = '#ffffff'; for (let i = 0; i < 9; i++) ctx.fillRect(W / 2 - 190 + i * 46, 186 + (i % 2) * 2, 6, 4); // snow caps
-  text('a  B I G F O O T  snowball fight', W / 2, 254, 12, '#1c7a36', null);
-  if (Math.floor(stateT * 2.2) % 2 === 0) text('CLICK TO START', W / 2, 284, 20, '#1e2747', '#ffffff');
-  text('Grab a green kid \u2022 hold to power up \u2022 release to throw', W / 2, 330, 12, '#1e2747', 'rgba(255,255,255,0.9)', 'center', 'normal');
-}
-function drawEnd(win) {
-  panel(140, 150);
-  if (win) {
-    text('LEVEL ' + level + ' CLEAR!', W / 2, 180, 40, '#2fae52', '#1e2747');
-    text('Bonus +' + (100 * level) + '    Score ' + score, W / 2, 222, 15, '#1e2747', null);
-    if (stateT > 0.6 && Math.floor(stateT * 2.2) % 2 === 0) text('CLICK FOR LEVEL ' + (level + 1), W / 2, 258, 18, '#1e2747', '#ffffff');
-  } else {
-    text('GAME OVER', W / 2, 180, 44, '#e03a3a', '#1e2747');
-    text('Reached level ' + level + '    Score ' + score + '    Best ' + best, W / 2, 222, 15, '#1e2747', null);
-    if (stateT > 0.8 && Math.floor(stateT * 2.2) % 2 === 0) text('CLICK TO PLAY AGAIN', W / 2, 258, 18, '#1e2747', '#ffffff');
-  }
-}
 function render() {
-  ctx.drawImage(bgCanvas, 0, 0);
-  for (const s of splats) {
-    ctx.globalAlpha = Math.min(1, s.life / 1.5);
-    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(s.x, s.y, s.r * 1.6, s.r * 0.7, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(150,175,215,0.6)'; ctx.fillRect(Math.round(s.x) - 1, Math.round(s.y), 3, 1);
-    ctx.globalAlpha = 1;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.drawImage(bg, 0, 0, W, H);
+  if (state === 'over') { renderOver(); drawFade(); return; }
+
+  decals.forEach(d => { if (d.type === 'splat' || d.z <= 0) drawDecal(d); });
+  // depth-sorted scene
+  const items = [];
+  forts.forEach(f => items.push({ y: f.y, f }));
+  kids.forEach(k => items.push({ y: k.y, k }));
+  items.sort((a, b) => a.y - b.y);
+  if (selected && usable(selected) && (state === 'play')) drawRing(selected);
+  for (const it of items) {
+    if (it.f) ctx.drawImage(it.f.img, it.f.ox, it.f.oy, it.f.img.width / it.f.s, it.f.img.height / it.f.s);
+    else drawKid(it.k);
   }
-  if (state === 'play' && selected && alive(selected)) drawSelection(selected);
-  for (const b of balls) { const sc = Math.max(0.4, 1 - b.h / 120); shadow(b.x, b.y, 4 * sc, 2 * sc, 0.3); }
-  const ents = [];
-  for (const m of MOUNDS) ents.push({ y: m.y + m.ry * 0.3, d: () => drawMound(m) });
-  for (const k of kids) ents.push({ y: k.y, d: () => drawKid(k) });
-  for (const s of spectators) ents.push({ y: s.y, d: () => drawSpectator(s) });
-  for (const b of balls) ents.push({ y: b.y + 0.5, d: () => drawBall(b) });
-  ents.sort((a, b) => a.y - b.y).forEach(e => e.d());
-  for (const p of parts) {
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.round(p.x) - 1, Math.round(p.y - p.h) - 1, 3, 3);
-    ctx.fillStyle = 'rgba(120,150,200,0.7)'; ctx.fillRect(Math.round(p.x) + 1, Math.round(p.y - p.h) + 1, 1, 1);
+  if (drag && drag.k.state === 'charge') drawPowerBar(drag.k);
+  decals.forEach(d => { if (d.type !== 'splat' && d.z > 0) drawDecal(d); });
+  // snowballs: dark ground shadow + white ball in the air
+  balls.forEach(b => ell(b.x, b.y, 2.4, 1.2, 0, 'rgba(70,72,82,0.6)'));
+  balls.forEach(b => {
+    ctx.beginPath(); ctx.arc(b.x, b.y - b.z, 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = ball3d(b.x, b.y - b.z, 2.8, '#ffffff'); ctx.fill();
+    ctx.strokeStyle = 'rgba(120,135,155,0.75)'; ctx.lineWidth = 0.6; ctx.stroke();
+  });
+  parts.forEach(p => {
+    const a = Math.max(0, 1 - p.t / p.life);
+    ctx.beginPath(); ctx.arc(p.x, p.y - p.z, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${a})`; ctx.fill();
+    ctx.strokeStyle = `rgba(150,180,210,${a * 0.8})`; ctx.lineWidth = 0.5; ctx.stroke();
+  });
+
+  if (state === 'title') {
+    serifText('SnowCraft', W / 2, H / 2 - 4, 30, 1);
+    const a = 0.45 + 0.35 * Math.sin(stateT * 3);
+    ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center'; ctx.font = '10px Verdana, Geneva, sans-serif';
+    ctx.fillStyle = '#7f9fc0'; ctx.fillText(pointer.touch ? 'tap to play' : 'click to play', W / 2, H / 2 + 22); ctx.restore();
+    ctx.save(); ctx.textAlign = 'right'; ctx.font = 'bold 8px Verdana, Geneva, sans-serif'; ctx.fillStyle = 'rgba(70,110,160,0.7)';
+    ctx.fillText('BIG ENTERTAINMENT', W - 8, H - 8); ctx.restore();
   }
-  if (state === 'play') {
-    for (const k of kids) if (k.team === 'player' && k.charging && k.cool <= 0 && controllable(k)) drawPower(k);
-    drawHUD();
-    if (bannerT > 0) {
-      ctx.globalAlpha = Math.min(1, bannerT / 0.4);
-      text('LEVEL ' + level, W / 2, H / 2 - 20, 44, '#ffffff', '#1e2747');
-      text(enemyCount(level) + ' red kids incoming!', W / 2, H / 2 + 16, 15, '#a11f22', '#ffffff');
-      ctx.globalAlpha = 1;
-    }
-  } else if (state === 'title') drawTitle();
-  else { drawHUD(); drawEnd(state === 'win'); }
+  if (bannerT > 0 && bannerText) serifText(bannerText, W / 2, H / 2 - 4, 22, Math.min(1, bannerT * 1.5));
+  drawFade();
 }
+function drawFade() { if (fade > 0) { ctx.fillStyle = `rgba(255,255,255,${fade})`; ctx.fillRect(0, 0, W, H); } }
+function renderOver() {
+  // forts stay on the field like the original end card
+  forts.forEach(f => ctx.drawImage(f.img, f.ox, f.oy, f.img.width / f.s, f.img.height / f.s));
+  const a = Math.min(1, stateT * 1.5);
+  ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.font = 'italic bold 15px "Trebuchet MS", Verdana, sans-serif'; ctx.fillStyle = '#f08c1c';
+  ctx.fillText('Happy Holidays', W / 2 + 28, H / 2 - 30);
+  ctx.font = 'bold 24px "Trebuchet MS", Verdana, sans-serif'; ctx.fillStyle = '#5b8fc8';
+  ctx.fillText('BIG ENTERTAINMENT', W / 2, H / 2 - 4);
+  ctx.font = '9px Verdana, Geneva, sans-serif'; ctx.fillStyle = '#7f9fc0';
+  ctx.fillText('SCORE: ' + score + (best > 0 ? '      BEST: ' + best : '') + '      LEVEL: ' + level, W / 2, H - 9);
+  ctx.textAlign = 'right'; ctx.font = 'bold 9px Verdana, Geneva, sans-serif'; ctx.fillStyle = '#1f4f8f';
+  ctx.fillText('Play Again', W - 18, H - 9);
+  ctx.fillStyle = '#4f87c4'; ctx.beginPath(); ctx.moveTo(W, H - 16); ctx.lineTo(W, H); ctx.lineTo(W - 16, H); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- input (mouse + touch via pointer events)
+function toLogical(e) { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; }
+function kidAt(x, y, touch) {
+  let bestK = null, bd = touch ? 26 : 17;
+  players().forEach(k => { if (!usable(k)) return; const d = Math.hypot(k.x - x, (k.y - 12) - y); if (d < bd) { bd = d; bestK = k; } });
+  return bestK;
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); audio();
+  const [x, y] = toLogical(e); pointer.x = x; pointer.y = y; pointer.touch = e.pointerType === 'touch';
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  if (state === 'title') { startGame(); return; }
+  if (state === 'over') { if (stateT > 0.6) fadeTo(() => { level = 1; score = 0; setupLevel(1); setState('play'); bannerText = 'Level 1'; bannerT = 2; }); return; }
+  if (state !== 'play') return;
+  const k = kidAt(x, y, pointer.touch);
+  if (k) { selected = k; drag = { k, id: e.pointerId, sx: x, sy: y, moved: false }; k.state = 'charge'; k.power = 0; k.tx = null; return; }
+  if (selected && usable(selected)) { [selected.tx, selected.ty] = clampZone('player', x, y); if (selected.state === 'idle') selected.state = 'walk'; }
+});
+cv.addEventListener('pointermove', e => {
+  const [x, y] = toLogical(e); pointer.x = x; pointer.y = y;
+  if (state === 'play') cv.style.cursor = kidAt(x, y, false) || drag ? 'pointer' : 'default';
+  if (!drag || drag.id !== e.pointerId) return;
+  if (!drag.moved && Math.hypot(x - drag.sx, y - drag.sy) > 6) drag.moved = true;
+  if (drag.moved) { [drag.k.tx, drag.k.ty] = clampZone('player', x, y + 12); }
+});
+function release(e) {
+  if (!drag || drag.id !== e.pointerId) return;
+  const k = drag.k; drag = null;
+  if (k.state === 'charge') { throwBall(k, k.power); k.state = 'throw'; k.t = 0.28; k.tx = null; }
+}
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+cv.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 
 // ---------------------------------------------------------------- layout
 function resize() {
   const vw = window.innerWidth, vh = window.innerHeight;
   const s = Math.min(vw / W, vh / H);
-  cv.style.width = Math.floor(W * s) + 'px'; cv.style.height = Math.floor(H * s) + 'px';
+  const cw = Math.floor(W * s), ch = Math.floor(H * s);
+  DPR = Math.min(3, (window.devicePixelRatio || 1) * s);
+  cv.style.width = cw + 'px'; cv.style.height = ch + 'px';
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  DPR = cv.width / W;
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', resize);
@@ -808,25 +708,26 @@ function frame(now) {
   update(dt); render();
   requestAnimationFrame(frame);
 }
-buildBackground(); resize();
-setupLevel(1); bannerT = 0;       // attract-mode scene behind the title
+buildBackground(); buildForts(); resize();
+setupLevel(1);                      // kids walk in behind the title, like the original
 requestAnimationFrame(frame);
 
 // ---------------------------------------------------------------- public API (skins / testing)
 window.SnowCraft = {
   SKINS, TEAMS, POSES,
-  /** setSkin('player'|'enemy', 'green' | 'red' | skinObject) */
+  /** setSkin('player'|'enemy', 'red' | 'green' | skinObject) */
   setSkin(team, skin) {
-    if (typeof skin === 'object') { const key = skin.key || ('custom_' + team); SKINS[key] = skin; skin = key; }
+    if (typeof skin === 'object') { const key = skin.key || ('custom_' + team); SKINS[key] = { ...SKINS[TEAMS[team]], ...skin }; skin = key; }
     if (!SKINS[skin]) throw new Error('Unknown skin ' + skin);
-    TEAMS[team] = skin; spriteCache.clear();
+    TEAMS[team] = skin;
   },
-  get state() { return { state, level, score, best, kids: kids.map(k => ({ team: k.team, x: k.x, y: k.y, state: k.state, hits: k.hits })), balls: balls.length }; },
+  get state() { return { state, level, score, best, kids: kids.map(k => ({ id: k.id, team: k.team, x: k.x, y: k.y, state: k.state, hits: k.hits })), balls: balls.length, enemyQueue }; },
   debug: {
     start: startGame,
     level(n) { level = n; score = 0; setupLevel(n); setState('play'); },
-    koEnemies() { enemies().forEach(k => alive(k) && ko(k)); },
+    koEnemies() { enemyQueue = 0; enemies().forEach(k => alive(k) && ko(k)); },
     koPlayers() { players().forEach(k => alive(k) && ko(k)); },
+    throwAt(i, x, y) { const k = players()[i]; if (k) throwBall(k, 0, x, y); },
     step(sec) { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); render(); },
   },
 };

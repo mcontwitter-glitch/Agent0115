@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#dfe9f7">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%227%22 fill=%22%23fff%22 stroke=%22%231e2747%22/%3E%3C/svg%3E">
+<title>SNOW CRAFT - BIG ENTERTAINMENT</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#dfe9f7;overflow:hidden;
+    overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
+  body{display:flex;align-items:center;justify-content:center;}
+  #game{display:block;image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none;
+    cursor:pointer;background:#fff;box-shadow:0 4px 24px rgba(40,60,110,.25);}
+</style>
+</head>
+<body>
+<canvas id="game" width="640" height="440" aria-label="Snow Craft game"></canvas>
+<noscript>Snow Craft needs JavaScript.</noscript>
+<script>
+/* ==========================================================================
+   SNOW CRAFT  -  BIG ENTERTAINMENT
+   A tribute to the classic 1998/99 "SnowCraft" snowball fight web game.
+   Single file, no external assets. Everything is drawn in code.
+
+   CONTROLS (same as the original):
+     * Press & HOLD on one of your green kids -> you grab him. Drag to move him
+       while the throw power charges. RELEASE to throw (diagonally at the red team).
+       Longer hold = farther / higher throw.
+     * Alternative: tap a kid to select him, then press-hold anywhere to aim the
+       throw at that direction (hold = distance), release to throw.
+       A quick tap on your own snow moves the selected kid there.
+   RULES:
+     * Red kids: 1st hit = shake off snow, 2nd hit = knocked down, 3rd hit = KO.
+     * Green kids: 1st hit = stunned ~7s (can't move/throw), 2nd hit = KO.
+     * KO all red kids to clear the level; every level adds another red kid.
+     * Lose when all three green kids are KO'd.
+
+   SKINS: characters are drawn from the SKINS table below. A skin can either use
+   the built-in pixel maps with a custom palette, or supply image sprites per pose
+   (e.g. future "lil foots" NFT art):
+       SnowCraft.setSkin('player', { sprites: { stand:'foot.png', charge:'foot_throw.png', ... },
+                                     spriteHeight: 36 });
+   Poses: stand, walk, charge, throw, sit (stunned), down (knocked down / KO).
+   Missing poses fall back to 'stand', then to the built-in pixel art.
+   ========================================================================== */
+(() => {
+'use strict';
+
+// ---------------------------------------------------------------- constants
+const W = 640, H = 440;           // logical resolution
+const U = 2;                      // size of one "art pixel"
+const PZ = 1.12, EZ = 0.88;       // territory split along the field diagonal
+const DIAG = (() => { const l = Math.hypot(W, H); return { x: -W / l, y: -H / l }; })(); // throw direction
+const CHARGE_TIME = 1.25;         // seconds to full power
+const COOLDOWN = 0.45;            // time to scoop a new snowball
+const PLAYER_STUN = 7.0;          // original: 7-8 seconds of shock
+const SHOW_AIM_HINT = true;       // small landing marker while charging
+
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ---------------------------------------------------------------- skins
+// Palette keys used by the pixel maps:
+//  W pompom  H hat  h hat-shade  S skin  s skin-shade  E eyes  C coat  c coat-shade
+//  M mittens  P pants  p pants-shade  B boots  w snowball  O outline
+const BASE_PAL = { W:'#ffffff', S:'#f7cfa6', s:'#dca67b', E:'#1b1b2a', P:'#3d4a6b', p:'#2b3550',
+                   B:'#4a3020', w:'#ffffff', O:'#1e2747' };
+const SKINS = {
+  green:  { label:'Green Beanies', palette:{ ...BASE_PAL, H:'#2fae52', h:'#1c7a36', C:'#45c466', c:'#279449', M:'#1c7a36' } },
+  red:    { label:'Red Beanies',   palette:{ ...BASE_PAL, H:'#e03a3a', h:'#a11f22', C:'#e65454', c:'#ad3232', M:'#a11f22' } },
+  yellow: { label:'Yellow Kid',    palette:{ ...BASE_PAL, H:'#f2c230', h:'#b88a12', C:'#f5cf45', c:'#c99d1c', M:'#8a5a2b', P:'#7a5230', p:'#5a3a20' } },
+  bigfoot:{ label:'Bigfoot', palette:{ F:'#4a3326', f:'#33221a', L:'#a27a58', E:'#ffffff', K:'#1b1b2a', O:'#1a1210' },
+            maps:null /* filled below */ },
+};
+// Which skin each side uses. Swap with SnowCraft.setSkin(team, skinKeyOrObject).
+const TEAMS = { player:'green', enemy:'red' };
+
+// ---------------------------------------------------------------- pixel maps (facing right)
+const LEGS_STAND = ["...PPPPPP...", "...PP..PP...", "...Pp..Pp...", "..BBB..BBB.."];
+const LEGS_WALK  = ["...PPPPPP...", "..PP....PP..", "..Pp....Pp..", ".BBB....BBB."];
+const HEAD = [
+  ".....WW.....",
+  "....HHHH....",
+  "...HHHHHH...",
+  "...hhhhhhh..",
+  "...SSSSES...",
+  "...SSSSSSS..",
+  "....sSSSs...",
+];
+const POSES = {
+  stand: [...HEAD,
+    "...HHHHHHh..",
+    "..CCCCCCCC..",
+    "..CcCCCCCC..",
+    "..McCCCCcM..",
+    "...cCCCCc...", ...LEGS_STAND],
+  walk: [...HEAD,
+    "...HHHHHHh..",
+    "..CCCCCCCC..",
+    "..CcCCCCCC..",
+    "..McCCCCcM..",
+    "...cCCCCc...", ...LEGS_WALK],
+  charge: [
+    "ww...WW.....",
+    "wwM.HHHH....",
+    "..CHHHHHH...",
+    "..Chhhhhhh..",
+    "..CSSSSES...",
+    "..CSSSSSSS..",
+    "..C.sSSSs...",
+    "..CHHHHHHh..",
+    "..CCCCCCCC..",
+    "..CcCCCCCC..",
+    "...cCCCCcM..",
+    "...cCCCCc...", "...PPPPPP...", "..PP...PP...", "..Pp...Pp...", ".BBB....BBB."],
+  throw: [...HEAD,
+    "...HHHHHHh..",
+    "..CCCCCCCCMw",
+    "..CcCCCCCCM.",
+    "..McCCCCc...",
+    "...cCCCCc...", "...PPPPPP...", "..PP...PP...", "..Pp...Pp...", ".BBB...BBB.."],
+  sit: [
+    "............", "............", "............",
+    ".....WW.....",
+    "....HHHH....",
+    "...HHHHHH...",
+    "...hhhhhhh..",
+    "...SSSSES...",
+    "...SSSSSSS..",
+    "....sSSSs...",
+    "...HHHHHHh..",
+    "..CCCCCCCC..",
+    ".MCcCCCCcCM.",
+    "..cCCCCCPPPP",
+    "..PPPPPPPPBB",
+    "........pBBB"],
+  down: [
+    "........CCC.......",
+    ".hHH.SS.CCCCPPPBB.",
+    "WhHHSESCCCCCPPPBB.",
+    ".hHHSSSCCcCCPPPBB.",
+    "........CMM.......",
+  ],
+  // KO: like the original, hat and boots come off
+  ko: [
+    "........CCC.......",
+    "....SSSSCCCCPPPSS.",
+    "...SSESSCCCCPPPSS.",
+    "....SSSSCCcCPPP...",
+    "........CMM.......",
+  ],
+};
+const BIGFOOT = [
+  "....FFFFF.....",
+  "...FFFFFFF....",
+  "..FFfLLLfFF...",
+  "..FFLEKLEKF...",
+  "..FFLLLLLFF...",
+  "..FFfLKLfFF...",
+  "...FFFFFFF....",
+  ".FFFFFFFFFFF..",
+  "FFFFFfffFFFFF.",
+  "FF.FFfffFFF.FF",
+  "FF.FFFFFFFF.FF",
+  "LL.FFFFFFFF.LL",
+  "...FFFFFFFF...",
+  "...FFF..FFF...",
+  "...FFF..FFF...",
+  "...FFF..FFF...",
+  "..LLLL..LLLL..",
+  ".LLLLL..LLLLL.",
+];
+const BIGFOOT_CHEER = [
+  "FF..FFFFF...FF",
+  "FF.FFFFFFF..FF",
+  "FFFFfLLLfFF.FF",
+  ".FFFLEKLEKFFF.",
+  "..FFLLLLLFF...",
+  "..FFfKKKfFF...",
+  "...FFFFFFF....",
+  "..FFFFFFFFF...",
+  "..FFFfffFFF...",
+  "...FFfffFFF...",
+  "...FFFFFFFF...",
+  "...FFFFFFFF...",
+  "...FFFFFFFF...",
+  "...FFF..FFF...",
+  "...FFF..FFF...",
+  "...FFF..FFF...",
+  "..LLLL..LLLL..",
+  ".LLLLL..LLLLL.",
+];
+SKINS.bigfoot.maps = { stand: BIGFOOT, cheer: BIGFOOT_CHEER };
+
+// ---------------------------------------------------------------- sprite building / cache
+const spriteCache = new Map();
+function buildSprite(map, pal, flip) {
+  const h = map.length, w = Math.max(...map.map(r => r.length));
+  const filled = (r, i) => r >= 0 && r < h && i >= 0 && i < w && map[r][i] && map[r][i] !== '.' && pal[map[r][i]];
+  const c = document.createElement('canvas');
+  c.width = (w + 2) * U; c.height = (h + 2) * U;
+  const g = c.getContext('2d');
+  for (let r = -1; r <= h; r++) for (let i = -1; i <= w; i++) {
+    let col = null;
+    if (filled(r, i)) col = pal[map[r][i]];
+    else if (filled(r - 1, i) || filled(r + 1, i) || filled(r, i - 1) || filled(r, i + 1)) col = pal.O || '#1e2747';
+    if (!col) continue;
+    const xx = flip ? (w - 1 - i) : i;
+    g.fillStyle = col; g.fillRect((xx + 1) * U, (r + 1) * U, U, U);
+  }
+  return c;
+}
+const imageCache = new Map();
+function loadImage(src) {
+  if (typeof src !== 'string') return src;            // already an Image/Canvas
+  if (!imageCache.has(src)) { const im = new Image(); im.src = src; imageCache.set(src, im); }
+  return imageCache.get(src);
+}
+function resolveSkin(s) { return typeof s === 'string' ? SKINS[s] : s; }
+// returns {img, w, h} - anchored at bottom-centre
+function getSprite(skinRef, pose, flip) {
+  const skin = resolveSkin(skinRef) || SKINS.green;
+  if (skin.sprites) {
+    const src = skin.sprites[pose] || skin.sprites.stand;
+    const im = src && loadImage(src);
+    if (im && (im.complete === undefined || im.complete) && (im.naturalWidth || im.width)) {
+      const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+      const targetH = (skin.spriteHeight || 36) * (pose === 'down' || pose === 'ko' ? 0.5 : pose === 'sit' ? 0.75 : 1);
+      const sc = targetH / ih;
+      return { img: im, w: iw * sc, h: targetH, flip, custom: true };
+    }
+  }
+  const key = (skin._id || (skin._id = 'skin' + Math.random().toString(36).slice(2))) + '|' + pose + '|' + (flip ? 1 : 0);
+  let c = spriteCache.get(key);
+  if (!c) {
+    const map = (skin.maps && (skin.maps[pose] || skin.maps.stand)) || POSES[pose] || POSES.stand;
+    c = buildSprite(map, { ...BASE_PAL, ...(skin.palette || {}) }, flip);
+    spriteCache.set(key, c);
+  }
+  return { img: c, w: c.width, h: c.height, flip };
+}
+function drawSprite(sp, x, y, alpha) {
+  if (alpha !== undefined) ctx.globalAlpha = alpha;
+  if (sp.custom && sp.flip) {
+    ctx.save(); ctx.translate(Math.round(x), 0); ctx.scale(-1, 1);
+    ctx.drawImage(sp.img, Math.round(-sp.w / 2), Math.round(y - sp.h), sp.w, sp.h); ctx.restore();
+  } else ctx.drawImage(sp.img, Math.round(x - sp.w / 2), Math.round(y - sp.h + U), sp.w, sp.h);
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------- utils
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const zoneV = (x, y) => x / W + y / H;
+let uid = 1;
+
+// ---------------------------------------------------------------- sound (tiny WebAudio synth)
+let actx = null, noiseBuf = null, muted = false;
+function audioUnlock() {
+  if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+  try {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.5, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { actx = null; }
+}
+function tone(type, f0, f1, dur, vol, delay = 0) {
+  const t = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(dur, freq, vol, type = 'bandpass') {
+  const t = actx.currentTime, s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = noiseBuf; f.type = type; f.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f).connect(g).connect(actx.destination); s.start(t); s.stop(t + dur + 0.02);
+}
+function sfx(kind) {
+  if (!actx || muted) return;
+  try {
+    if (kind === 'throw') noise(0.12, 1400, 0.12);
+    else if (kind === 'hit') { noise(0.16, 500, 0.45, 'lowpass'); tone('sine', 160, 60, 0.15, 0.25); }
+    else if (kind === 'splat') noise(0.08, 900, 0.08, 'lowpass');
+    else if (kind === 'ko') { tone('square', 880, 220, 0.4, 0.06); }
+    else if (kind === 'win') [523, 659, 784, 1046].forEach((f, i) => tone('square', f, f, 0.14, 0.05, i * 0.12));
+    else if (kind === 'lose') [392, 330, 262, 196].forEach((f, i) => tone('square', f, f * 0.98, 0.2, 0.05, i * 0.18));
+    else if (kind === 'laugh') [0, 1, 2, 3].forEach(i => tone('square', 520 - i * 20, 380, 0.09, 0.04, i * 0.13));
+  } catch (e) {}
+}
+
+// ---------------------------------------------------------------- field
+const MOUNDS_PLAYER = [ { x: 380, y: 282, rx: 30, ry: 11 }, { x: 488, y: 214, rx: 28, ry: 10 }, { x: 266, y: 352, rx: 26, ry: 10 }, { x: 580, y: 150, rx: 24, ry: 9 } ];
+const MOUNDS = [...MOUNDS_PLAYER, ...MOUNDS_PLAYER.map(m => ({ x: W - m.x, y: H - m.y, rx: m.rx, ry: m.ry }))]
+  .map(m => ({ ...m, h: 15 }));
+const PLAYER_START = [ { x: 410, y: 318 }, { x: 520, y: 252 }, { x: 300, y: 392 } ];
+
+let bgCanvas = null;
+function buildBackground() {
+  bgCanvas = document.createElement('canvas'); bgCanvas.width = W; bgCanvas.height = H;
+  const g = bgCanvas.getContext('2d');
+  const grd = g.createLinearGradient(0, 0, W, H);
+  grd.addColorStop(0, '#eef4fd'); grd.addColorStop(0.5, '#fbfdff'); grd.addColorStop(1, '#eef4fd');
+  g.fillStyle = grd; g.fillRect(0, 0, W, H);
+  // soft drifts
+  for (let i = 0; i < 26; i++) {
+    const x = rand(0, W), y = rand(0, H), rx = rand(40, 120), ry = rx * 0.28;
+    g.fillStyle = 'rgba(205,220,242,0.16)'; g.beginPath(); g.ellipse(x, y + 3, rx, ry, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.6)'; g.beginPath(); g.ellipse(x - 4, y, rx * 0.9, ry * 0.8, 0, 0, Math.PI * 2); g.fill();
+  }
+  // pixel sparkle / speckles
+  for (let i = 0; i < 900; i++) {
+    g.fillStyle = Math.random() < 0.75 ? 'rgba(170,192,225,0.35)' : 'rgba(255,255,255,0.95)';
+    g.fillRect(Math.floor(rand(0, W / U)) * U, Math.floor(rand(0, H / U)) * U, U, U);
+  }
+  // trampled no-man's land along the diagonal
+  for (let i = 0; i < 160; i++) {
+    const t = Math.random(), x = W * (1 - t) + rand(-30, 30), y = H * t + rand(-20, 20);
+    g.fillStyle = 'rgba(160,185,220,0.22)';
+    g.fillRect(Math.floor(x / U) * U, Math.floor(y / U) * U, U * 2, U);
+  }
+}
+
+// ---------------------------------------------------------------- game state
+let state = 'title', stateT = 0, level = 1, score = 0, best = 0;
+try { best = +localStorage.getItem('snowcraft_best') || 0; } catch (e) {}
+let kids = [], balls = [], parts = [], splats = [], selected = null, bannerT = 0, endTimer = -1, time = 0;
+const spectators = [
+  { kind: 'bigfoot', x: 44, y: 420, jump: 0 },
+  { kind: 'yellow', x: 612, y: 96, jump: 0, face: -1 },
+];
+
+function makeKid(team, x, y) {
+  return { id: uid++, team, x, y, hits: 0, state: 'idle', t: 0, cool: 0, charge: 0, charging: false,
+           walkTo: null, moving: false, face: team === 'player' ? -1 : 1, anim: rand(0, 1),
+           ai: { t: rand(0.6, 2.2), chargeFor: 0.7 }, laugh: 0 };
+}
+function inMound(x, y, pad = 0) {
+  return MOUNDS.some(m => ((x - m.x) / (m.rx + pad)) ** 2 + ((y - m.y) / (m.ry + pad * 0.6)) ** 2 < 1);
+}
+function clampTeam(team, x, y) {
+  x = clamp(x, 14, W - 14); y = clamp(y, 66, H - 8);
+  const gx = 1 / W, gy = 1 / H, g2 = gx * gx + gy * gy, v = zoneV(x, y);
+  if (team === 'player' && v < PZ) { const d = PZ - v; x += gx * d / g2; y += gy * d / g2; }
+  if (team === 'enemy' && v > EZ) { const d = v - EZ; x -= gx * d / g2; y -= gy * d / g2; }
+  x = clamp(x, 14, W - 14); y = clamp(y, 66, H - 8);
+  for (const m of MOUNDS) {
+    let dx = (x - m.x) / (m.rx + 7), dy = (y - m.y) / (m.ry + 5); let d = Math.hypot(dx, dy);
+    if (d < 1) { if (d < 1e-4) { dy = 1; d = 1; } x = m.x + dx / d * (m.rx + 7); y = m.y + dy / d * (m.ry + 5); }
+  }
+  return [x, y];
+}
+function randomSpot(team, near, radius) {
+  for (let i = 0; i < 60; i++) {
+    const x = near ? near.x + rand(-radius, radius) : rand(26, W - 26);
+    const y = near ? near.y + rand(-radius, radius) * 0.7 : rand(76, H - 16);
+    if (x < 20 || x > W - 20 || y < 76 || y > H - 12) continue;
+    const v = zoneV(x, y);
+    const ok = team === 'enemy' ? (v < EZ - 0.03 && v > 0.16) : (v > PZ + 0.03);
+    if (ok && !inMound(x, y, 8)) return { x, y };
+  }
+  return team === 'enemy' ? { x: 130, y: 150 } : { x: 510, y: 330 };
+}
+function enemyCount(lv) { return Math.min(3 + (lv - 1), 14); }
+
+function setupLevel(lv) {
+  kids = []; balls = []; parts = []; splats = []; endTimer = -1;
+  for (const p of PLAYER_START) kids.push(makeKid('player', p.x, p.y));
+  const n = enemyCount(lv);
+  for (let i = 0; i < n; i++) {
+    let s, tries = 0;
+    do { s = randomSpot('enemy'); tries++; }
+    while (tries < 80 && kids.some(k => k.team === 'enemy' && Math.hypot(k.x - s.x, k.y - s.y) < 40));
+    kids.push(makeKid('enemy', s.x, s.y));
+  }
+  selected = kids[0];
+  bannerT = 1.6;
+}
+function startGame() { level = 1; score = 0; setupLevel(1); setState('play'); }
+function setState(s) { state = s; stateT = 0; }
+const players = () => kids.filter(k => k.team === 'player');
+const enemies = () => kids.filter(k => k.team === 'enemy');
+const alive = k => k.state !== 'ko';
+const controllable = k => k && (k.state === 'idle' || k.state === 'throw');
+
+// ---------------------------------------------------------------- throwing
+function throwBall(k, dx, dy, power, distOverride) {
+  const dist = distOverride !== undefined ? distOverride : 40 + power * 560;
+  const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n;
+  if (Math.abs(dx) > 0.05) k.face = dx < 0 ? -1 : 1;
+  const sx = k.x + k.face * 7, sy = k.y - 1;
+  balls.push({ sx, sy, tx: sx + dx * dist, ty: sy + dy * dist, x: sx, y: sy, h: 24, u: 0,
+               T: 0.4 + dist / 650, peak: 8 + dist * 0.2, team: k.team, owner: k });
+  k.state = 'throw'; k.t = 0; k.cool = COOLDOWN; k.charge = 0; k.charging = false;
+  sfx('throw');
+}
+function kidHeight(k) { return k.state === 'down' ? 9 : k.state === 'stunned' ? 22 : 30; }
+
+function puff(x, y, h, n, spread = 60) {
+  for (let i = 0; i < n; i++)
+    parts.push({ x, y, h, vx: rand(-spread, spread), vy: rand(-spread, spread) * 0.5, vh: rand(20, 90), life: rand(0.35, 0.7) });
+}
+function hitKid(k, b) {
+  puff(k.x, k.y, b.h, 10);
+  sfx('hit');
+  if (state !== 'play') { if (k.state === 'idle') { k.state = 'hit'; k.t = 0; } return; } // attract mode
+  k.hits++;
+  if (k.team === 'enemy') {
+    score += 10 * level;
+    if (k.hits >= 3) ko(k);
+    else { k.state = k.hits === 2 ? 'down' : 'hit'; k.t = 0; k.charging = false; k.charge = 0; k.walkTo = null; }
+  } else {
+    if (ptr.kid === k) ptr.mode = null;
+    k.charging = false; k.charge = 0; k.walkTo = null;
+    if (k.hits >= 2) ko(k); else { k.state = 'stunned'; k.t = 0; }
+  }
+}
+function ko(k) {
+  k.state = 'ko'; k.t = 0; k.charging = false; k.walkTo = null;
+  k.hatX = k.x + rand(-22, 22); k.hatY = k.y + rand(4, 12);
+  sfx('ko');
+  if (k.team === 'enemy') { score += 50 * level; spectators.forEach(s => s.jump = 1.0); }
+  if (selected === k) selected = players().find(p => alive(p) && p !== k) || null;
+}
+
+// ---------------------------------------------------------------- input
+const ptr = { mode: null, kid: null, x: 0, y: 0, sx: 0, sy: 0, t0: 0, moved: 0, offX: 0, offY: 0, id: null };
+function toLogical(e) {
+  const r = cv.getBoundingClientRect();
+  return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height];
+}
+function pickPlayerKid(x, y) {
+  let best = null, bd = 1e9;
+  for (const k of players()) {
+    if (!alive(k)) continue;
+    const dx = x - k.x, dy = y - (k.y - 16);
+    if (Math.abs(dx) < 18 && dy > -26 && dy < 24) { const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = k; } }
+  }
+  return best;
+}
+function onDown(e) {
+  e.preventDefault();
+  audioUnlock();
+  const [x, y] = toLogical(e);
+  ptr.x = ptr.sx = x; ptr.y = ptr.sy = y; ptr.t0 = performance.now(); ptr.moved = 0; ptr.mode = null; ptr.kid = null;
+  ptr.id = e.pointerId;
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  if (state === 'title') { startGame(); return; }
+  if (state === 'win') { if (stateT > 0.6) { level++; setupLevel(level); setState('play'); } return; }
+  if (state === 'lose') { if (stateT > 0.8) startGame(); return; }
+  if (state !== 'play' || endTimer >= 0) return;
+  const k = pickPlayerKid(x, y);
+  if (k) {
+    selected = k;
+    if (controllable(k)) {
+      ptr.mode = 'grab'; ptr.kid = k; k.charging = true; k.charge = 0; k.walkTo = null;
+      ptr.offX = k.x - x; ptr.offY = k.y - y;
+    }
+  } else if (controllable(selected)) {
+    ptr.mode = 'aim'; ptr.kid = selected; selected.charging = true; selected.charge = 0;
+  }
+}
+function onMove(e) {
+  if (ptr.id !== null && e.pointerId !== ptr.id) return;
+  const [x, y] = toLogical(e);
+  ptr.x = x; ptr.y = y; ptr.moved = Math.max(ptr.moved, Math.hypot(x - ptr.sx, y - ptr.sy));
+  const k = ptr.kid;
+  if (ptr.mode === 'grab' && k && controllable(k) && ptr.moved > 4) {
+    const [cx, cy] = clampTeam('player', x + ptr.offX, y + ptr.offY); k.walkTo = { x: cx, y: cy };
+  }
+}
+function onUp(e) {
+  if (ptr.id !== null && e.pointerId !== ptr.id) return;
+  ptr.id = null;
+  const k = ptr.kid, mode = ptr.mode; ptr.mode = null; ptr.kid = null;
+  if (!k || state !== 'play' || !mode) return;
+  if (!controllable(k) || !k.charging) { k.charging = false; k.charge = 0; return; }
+  const held = (performance.now() - ptr.t0) / 1000;
+  const tap = held < 0.17 && ptr.moved < 8;
+  if (mode === 'grab') {
+    if (tap || k.cool > 0) { k.charging = false; k.charge = 0; return; }   // tap = just select
+    throwBall(k, DIAG.x, DIAG.y, k.charge);
+  } else {
+    if (tap) { k.charging = false; k.charge = 0; const [cx, cy] = clampTeam('player', ptr.x, ptr.y); k.walkTo = { x: cx, y: cy }; return; }
+    if (k.cool > 0) { k.charging = false; k.charge = 0; return; }
+    throwBall(k, ptr.x - k.x, ptr.y - k.y, k.charge);
+  }
+}
+cv.addEventListener('pointerdown', onDown);
+cv.addEventListener('pointermove', onMove);
+cv.addEventListener('pointerup', onUp);
+cv.addEventListener('pointercancel', onUp);
+cv.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+window.addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M') muted = !muted; });
+
+// ---------------------------------------------------------------- update
+function updateKid(k, dt) {
+  k.t += dt; k.anim += dt; k.cool = Math.max(0, k.cool - dt); k.laugh = Math.max(0, k.laugh - dt);
+  switch (k.state) {
+    case 'stunned': if (k.t > PLAYER_STUN) { k.state = 'idle'; k.t = 0; } break;
+    case 'hit':     if (k.t > 1.0) { k.state = 'idle'; k.t = 0; } break;
+    case 'down':    if (k.t > 2.6) { k.state = 'idle'; k.t = 0; } break;
+    case 'throw':   if (k.t > 0.25) { k.state = 'idle'; k.t = 0; } break;
+  }
+  if (k.state === 'ko') return;
+  if (k.charging && k.cool <= 0 && controllable(k)) k.charge = Math.min(1, k.charge + dt / (k.team === 'player' ? CHARGE_TIME : 1));
+  k.moving = false;
+  if (k.walkTo && controllable(k)) {
+    const sp = k.team === 'player' ? 100 : Math.min(42 + level * 4, 85);
+    const dx = k.walkTo.x - k.x, dy = k.walkTo.y - k.y, d = Math.hypot(dx, dy);
+    if (d < 1.5) k.walkTo = null;
+    else {
+      const st = Math.min(d, sp * dt);
+      const [nx, ny] = clampTeam(k.team, k.x + dx / d * st, k.y + dy / d * st);
+      if (Math.hypot(nx - k.x, ny - k.y) < st * 0.2) k.walkTo = null;  // stuck
+      k.x = nx; k.y = ny; k.moving = true;
+      if (!k.charging && Math.abs(dx) > 2) k.face = dx < 0 ? -1 : 1;
+    }
+  }
+}
+function enemyAI(k, dt, attract) {
+  if (!controllable(k)) return;
+  const targets = kids.filter(p => p.team !== k.team && alive(p));
+  if (!targets.length) return;
+  const ai = k.ai;
+  if (k.charging) {
+    if (k.charge >= ai.chargeFor && k.cool <= 0) {
+      const stunned = targets.filter(p => p.state === 'stunned' || p.state === 'down');
+      const tg = (stunned.length && Math.random() < 0.5) ? stunned[0] : targets[Math.floor(Math.random() * targets.length)];
+      const acc = attract ? 0.25 : Math.max(0.07, 0.2 - 0.015 * level);
+      let dx = tg.x - k.x, dy = tg.y - k.y;
+      if (!attract && level >= 3 && tg.walkTo && tg.moving) { // lead moving targets a little
+        const lx = tg.walkTo.x - tg.x, ly = tg.walkTo.y - tg.y, ld = Math.hypot(lx, ly) || 1;
+        const lead = Math.min(ld, 60) * Math.min(1, (level - 2) * 0.25); dx += lx / ld * lead; dy += ly / ld * lead;
+      }
+      const dist = Math.hypot(dx, dy) * (1 + rand(-acc, acc));
+      const ang = Math.atan2(dy, dx) + rand(-1, 1) * Math.max(0.025, 0.11 - 0.01 * level);
+      throwBall(k, Math.cos(ang), Math.sin(ang), 0, dist);
+    }
+    return;
+  }
+  ai.t -= dt;
+  if (ai.t > 0) return;
+  const n = kids.filter(e => e.team === k.team && alive(e)).length;
+  const pace = Math.pow(Math.max(1, n) / 3, 0.8) * Math.max(0.6, 1 - 0.05 * (level - 1));
+  if (k.cool <= 0 && Math.random() < 0.62) {
+    k.charging = true; k.charge = 0; ai.chargeFor = rand(0.45, 1.0); k.walkTo = null;
+  } else {
+    k.walkTo = randomSpot(k.team, k, 110);
+  }
+  ai.t = rand(1.1, 2.6) * pace;
+}
+function updateBalls(dt) {
+  const STEPS = 4;
+  outer: for (let i = balls.length - 1; i >= 0; i--) {
+    const b = balls[i];
+    for (let s = 0; s < STEPS; s++) {
+      b.u += dt / STEPS / b.T;
+      if (b.u >= 1) {
+        splats.push({ x: b.tx, y: b.ty, life: 5, r: rand(3, 5) }); puff(b.tx, b.ty, 1, 6, 40); sfx('splat');
+        balls.splice(i, 1); continue outer;
+      }
+      b.x = b.sx + (b.tx - b.sx) * b.u; b.y = b.sy + (b.ty - b.sy) * b.u;
+      b.h = 24 * (1 - b.u) + b.peak * 4 * b.u * (1 - b.u);
+      for (const m of MOUNDS) {
+        if (((b.x - m.x) / m.rx) ** 2 + ((b.y - m.y) / m.ry) ** 2 < 1 && b.h < m.h && b.u > 0.08) {
+          puff(b.x, b.y, b.h, 8, 50); sfx('splat'); balls.splice(i, 1); continue outer;
+        }
+      }
+      for (const k of kids) {
+        if (k.team === b.team || !alive(k)) continue;
+        if (Math.abs(b.x - k.x) < 9 && Math.abs(b.y - k.y) < 7 && b.h < kidHeight(k)) {
+          hitKid(k, b); balls.splice(i, 1); continue outer;
+        }
+      }
+    }
+    if (b.x < -60 || b.x > W + 60 || b.y < -60 || b.y > H + 60) balls.splice(i, 1);
+  }
+}
+function update(dt) {
+  time += dt; stateT += dt;
+  if (bannerT > 0) bannerT -= dt;
+  const attract = state === 'title';
+  if (state === 'play' || attract) {
+    for (const k of kids) updateKid(k, dt);
+    for (const k of kids) {
+      if (k.team === 'enemy' || (attract && k.team === 'player')) enemyAI(k, dt, attract);
+    }
+    updateBalls(dt);
+  } else if (state === 'lose') {
+    for (const k of kids) if (k.team === 'enemy' && alive(k)) { k.laugh = 1; }
+  }
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vh -= 300 * dt; p.h = Math.max(0, p.h + p.vh * dt);
+    if (p.life <= 0) parts.splice(i, 1);
+  }
+  for (let i = splats.length - 1; i >= 0; i--) { splats[i].life -= dt; if (splats[i].life <= 0) splats.splice(i, 1); }
+  for (const s of spectators) s.jump = Math.max(0, s.jump - dt);
+
+  if (state === 'play') {
+    if (selected && !alive(selected)) selected = players().find(alive) || null;
+    if (endTimer < 0) {
+      if (!enemies().some(alive)) { endTimer = 1.2; }
+      else if (!players().some(alive)) { endTimer = 1.4; sfx('laugh'); }
+    } else {
+      endTimer -= dt;
+      if (endTimer <= 0) {
+        endTimer = -1;
+        if (!enemies().some(alive)) { score += 100 * level; setState('win'); sfx('win'); }
+        else { setState('lose'); sfx('lose'); }
+        if (score > best) { best = score; try { localStorage.setItem('snowcraft_best', best); } catch (e) {} }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- render
+function shadow(x, y, rx, ry, a = 0.22) {
+  ctx.fillStyle = `rgba(80,110,165,${a})`; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+}
+function drawMound(m) {
+  shadow(m.x + 5, m.y + 4, m.rx + 2, m.ry + 3, 0.18);
+  ctx.fillStyle = '#c9daf0'; ctx.beginPath(); ctx.ellipse(m.x, m.y - 4, m.rx, m.ry + 6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#eef4fd'; ctx.beginPath(); ctx.ellipse(m.x - 2, m.y - 7, m.rx - 3, m.ry + 3, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(m.x - 6, m.y - 10, m.rx * 0.6, m.ry * 0.6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(120,150,200,0.55)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(m.x, m.y - 4, m.rx, m.ry + 6, 0, 0.1, Math.PI - 0.1); ctx.stroke();
+}
+function drawKid(k) {
+  const skin = TEAMS[k.team === 'player' ? 'player' : 'enemy'];
+  const flip = k.face < 0;
+  let pose = 'stand', ox = 0, oy = 0, alpha;
+  if (k.state === 'ko') { pose = 'ko'; alpha = 0.92; }
+  else if (k.state === 'down') pose = 'down';
+  else if (k.state === 'stunned') pose = 'sit';
+  else if (k.state === 'hit') { pose = 'stand'; ox = Math.sin(k.t * 50) * 1.5; }
+  else if (k.charging && k.cool <= 0) pose = 'charge';
+  else if (k.state === 'throw') pose = 'throw';
+  else if (k.moving) pose = (Math.floor(k.anim * 7) % 2) ? 'walk' : 'stand';
+  if (k.laugh > 0 || (state === 'lose' && k.team === 'enemy' && alive(k))) oy = -Math.abs(Math.sin(time * 9 + k.id)) * 4;
+
+  const lying = pose === 'down' || pose === 'ko';
+  shadow(k.x, k.y, lying ? 18 : 10, lying ? 5 : 4);
+  if (k.state === 'ko') { // hat that flew off
+    const hc = (resolveSkin(skin).palette || {}).H || '#888';
+    ctx.fillStyle = '#1e2747'; ctx.fillRect(Math.round(k.hatX) - 5, Math.round(k.hatY) - 5, 10, 6);
+    ctx.fillStyle = hc; ctx.fillRect(Math.round(k.hatX) - 4, Math.round(k.hatY) - 4, 8, 4);
+    ctx.fillStyle = '#fff'; ctx.fillRect(Math.round(k.hatX) - 1, Math.round(k.hatY) - 6, 2, 2);
+  }
+  const sp = getSprite(skin, pose, flip);
+  drawSprite(sp, k.x + ox, k.y + oy + (lying ? 2 : 0), alpha);
+  // snow stuck on clothes = damage indicator
+  if (k.hits > 0 && !lying) {
+    ctx.fillStyle = '#ffffff';
+    const by = k.y + oy - (pose === 'sit' ? 10 : 18);
+    ctx.fillRect(Math.round(k.x - 4), Math.round(by), 4, 2);
+    if (k.hits > 1) ctx.fillRect(Math.round(k.x + 2), Math.round(by + 4), 2, 2);
+  }
+  // dizzy stars
+  if (k.state === 'stunned' || k.state === 'down' || (k.state === 'ko' && k.t < 3)) {
+    const cy = k.y - (k.state === 'stunned' ? 30 : 14);
+    for (let i = 0; i < 3; i++) {
+      const a = time * 4 + i * 2.1;
+      ctx.fillStyle = i % 2 ? '#f5c518' : '#7fb2ff';
+      ctx.fillRect(Math.round(k.x + Math.cos(a) * 9) - 1, Math.round(cy + Math.sin(a) * 3) - 1, 3, 3);
+    }
+  }
+  if (k.laugh > 0 || (state === 'lose' && k.team === 'enemy' && alive(k))) {
+    ctx.font = 'bold 9px monospace'; ctx.fillStyle = '#a11f22'; ctx.textAlign = 'center';
+    if (Math.floor(time * 3 + k.id) % 2) ctx.fillText('HA', k.x, k.y - 38 + oy);
+  }
+}
+function drawSelection(k) {
+  ctx.save();
+  ctx.strokeStyle = '#1c7a36'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.lineDashOffset = -time * 12;
+  ctx.beginPath(); ctx.ellipse(k.x, k.y, 14, 6, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+}
+function drawPower(k) {
+  const x = Math.round(k.x - 12), y = Math.round(k.y - 46);
+  ctx.fillStyle = '#1e2747'; ctx.fillRect(x - 1, y - 1, 26, 6);
+  ctx.fillStyle = '#dfe9f7'; ctx.fillRect(x, y, 24, 4);
+  const p = k.charge;
+  ctx.fillStyle = p < 0.5 ? '#45c466' : p < 0.85 ? '#f2c230' : '#e03a3a';
+  ctx.fillRect(x, y, Math.round(24 * p), 4);
+  if (SHOW_AIM_HINT && ptr.kid === k) {
+    let dx = DIAG.x, dy = DIAG.y;
+    if (ptr.mode === 'aim') { dx = ptr.x - k.x; dy = ptr.y - k.y; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n; }
+    const d = 40 + p * 560, tx = k.x + k.face * 7 + dx * d, ty = k.y + dy * d;
+    ctx.strokeStyle = 'rgba(30,39,71,0.6)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(tx, ty, 7, 3, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tx - 4, ty - 3); ctx.lineTo(tx + 4, ty + 3); ctx.moveTo(tx + 4, ty - 3); ctx.lineTo(tx - 4, ty + 3); ctx.stroke();
+  }
+}
+function drawSpectator(s) {
+  const j = s.jump > 0 ? -Math.abs(Math.sin(s.jump * 12)) * 7 : 0;
+  shadow(s.x, s.y, s.kind === 'bigfoot' ? 14 : 10, 4);
+  if (s.kind === 'bigfoot') drawSprite(getSprite('bigfoot', s.jump > 0 ? 'cheer' : 'stand', false), s.x, s.y + j);
+  else drawSprite(getSprite('yellow', s.jump > 0 ? 'throw' : 'stand', true), s.x, s.y + j);
+}
+function drawBall(b) {
+  ctx.fillStyle = '#1e2747'; ctx.fillRect(Math.round(b.x) - 3, Math.round(b.y - b.h) - 3, 6, 6);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.round(b.x) - 2, Math.round(b.y - b.h) - 3, 4, 6);
+  ctx.fillRect(Math.round(b.x) - 3, Math.round(b.y - b.h) - 2, 6, 4);
+  ctx.fillStyle = '#c9daf0'; ctx.fillRect(Math.round(b.x), Math.round(b.y - b.h), 2, 2);
+}
+function text(str, x, y, size, fill, stroke, align = 'center', weight = 'bold', family = '"Trebuchet MS", Verdana, sans-serif') {
+  ctx.font = `${weight} ${size}px ${family}`; ctx.textAlign = align; ctx.textBaseline = 'middle';
+  if (stroke) { ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(3, size / 6); ctx.strokeStyle = stroke; ctx.strokeText(str, x, y); }
+  ctx.fillStyle = fill; ctx.fillText(str, x, y);
+}
+function drawHeads(team, n, total, x, y, dir) {
+  const sk = resolveSkin(TEAMS[team]).palette || {};
+  for (let i = 0; i < total; i++) {
+    const xx = x + dir * i * 11;
+    ctx.fillStyle = '#1e2747'; ctx.fillRect(xx - 1, y - 1, 10, 10);
+    ctx.fillStyle = i < n ? (sk.H || '#888') : '#c9d3e3'; ctx.fillRect(xx, y, 8, 4);
+    ctx.fillStyle = i < n ? (sk.S || '#f7cfa6') : '#dfe5ee'; ctx.fillRect(xx, y + 4, 8, 4);
+  }
+}
+function drawHUD() {
+  text('LEVEL ' + level, 12, 16, 14, '#1e2747', 'rgba(255,255,255,0.9)', 'left');
+  text('SCORE ' + String(score).padStart(5, '0'), 86, 16, 14, '#1e2747', 'rgba(255,255,255,0.9)', 'left');
+  text('BIG ENTERTAINMENT', W - 12, 16, 11, '#a11f22', 'rgba(255,255,255,0.9)', 'right');
+  const pl = players(), en = enemies();
+  drawHeads('player', pl.filter(alive).length, pl.length, W - 34, H - 18, 1);
+  drawHeads('enemy', en.filter(alive).length, en.length, 12, 30, 1);
+}
+function panel(y, h) {
+  ctx.fillStyle = 'rgba(255,255,255,0.82)'; ctx.fillRect(0, y, W, h);
+  ctx.fillStyle = 'rgba(30,39,71,0.85)'; ctx.fillRect(0, y, W, 2); ctx.fillRect(0, y + h - 2, W, 2);
+}
+function drawTitle() {
+  panel(110, 200);
+  text('BIG ENTERTAINMENT', W / 2, 140, 22, '#a11f22', '#ffffff');
+  text('presents', W / 2, 162, 12, '#1e2747', null, 'center', 'italic');
+  // icy title
+  ctx.font = 'bold 66px "Arial Black", Impact, "Trebuchet MS", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineWidth = 10; ctx.strokeStyle = '#1e2747'; ctx.strokeText('SNOW CRAFT', W / 2, 214);
+  const gr = ctx.createLinearGradient(0, 186, 0, 244); gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.55, '#d6e7ff'); gr.addColorStop(1, '#7fb2ff');
+  ctx.fillStyle = gr; ctx.fillText('SNOW CRAFT', W / 2, 214);
+  ctx.fillStyle = '#ffffff'; for (let i = 0; i < 9; i++) ctx.fillRect(W / 2 - 190 + i * 46, 186 + (i % 2) * 2, 6, 4); // snow caps
+  text('a  B I G F O O T  snowball fight', W / 2, 254, 12, '#1c7a36', null);
+  if (Math.floor(stateT * 2.2) % 2 === 0) text('CLICK TO START', W / 2, 284, 20, '#1e2747', '#ffffff');
+  text('Grab a green kid \u2022 hold to power up \u2022 release to throw', W / 2, 330, 12, '#1e2747', 'rgba(255,255,255,0.9)', 'center', 'normal');
+}
+function drawEnd(win) {
+  panel(140, 150);
+  if (win) {
+    text('LEVEL ' + level + ' CLEAR!', W / 2, 180, 40, '#2fae52', '#1e2747');
+    text('Bonus +' + (100 * level) + '    Score ' + score, W / 2, 222, 15, '#1e2747', null);
+    if (stateT > 0.6 && Math.floor(stateT * 2.2) % 2 === 0) text('CLICK FOR LEVEL ' + (level + 1), W / 2, 258, 18, '#1e2747', '#ffffff');
+  } else {
+    text('GAME OVER', W / 2, 180, 44, '#e03a3a', '#1e2747');
+    text('Reached level ' + level + '    Score ' + score + '    Best ' + best, W / 2, 222, 15, '#1e2747', null);
+    if (stateT > 0.8 && Math.floor(stateT * 2.2) % 2 === 0) text('CLICK TO PLAY AGAIN', W / 2, 258, 18, '#1e2747', '#ffffff');
+  }
+}
+function render() {
+  ctx.drawImage(bgCanvas, 0, 0);
+  for (const s of splats) {
+    ctx.globalAlpha = Math.min(1, s.life / 1.5);
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(s.x, s.y, s.r * 1.6, s.r * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(150,175,215,0.6)'; ctx.fillRect(Math.round(s.x) - 1, Math.round(s.y), 3, 1);
+    ctx.globalAlpha = 1;
+  }
+  if (state === 'play' && selected && alive(selected)) drawSelection(selected);
+  for (const b of balls) { const sc = Math.max(0.4, 1 - b.h / 120); shadow(b.x, b.y, 4 * sc, 2 * sc, 0.3); }
+  const ents = [];
+  for (const m of MOUNDS) ents.push({ y: m.y + m.ry * 0.3, d: () => drawMound(m) });
+  for (const k of kids) ents.push({ y: k.y, d: () => drawKid(k) });
+  for (const s of spectators) ents.push({ y: s.y, d: () => drawSpectator(s) });
+  for (const b of balls) ents.push({ y: b.y + 0.5, d: () => drawBall(b) });
+  ents.sort((a, b) => a.y - b.y).forEach(e => e.d());
+  for (const p of parts) {
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.round(p.x) - 1, Math.round(p.y - p.h) - 1, 3, 3);
+    ctx.fillStyle = 'rgba(120,150,200,0.7)'; ctx.fillRect(Math.round(p.x) + 1, Math.round(p.y - p.h) + 1, 1, 1);
+  }
+  if (state === 'play') {
+    for (const k of kids) if (k.team === 'player' && k.charging && k.cool <= 0 && controllable(k)) drawPower(k);
+    drawHUD();
+    if (bannerT > 0) {
+      ctx.globalAlpha = Math.min(1, bannerT / 0.4);
+      text('LEVEL ' + level, W / 2, H / 2 - 20, 44, '#ffffff', '#1e2747');
+      text(enemyCount(level) + ' red kids incoming!', W / 2, H / 2 + 16, 15, '#a11f22', '#ffffff');
+      ctx.globalAlpha = 1;
+    }
+  } else if (state === 'title') drawTitle();
+  else { drawHUD(); drawEnd(state === 'win'); }
+}
+
+// ---------------------------------------------------------------- layout
+function resize() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const s = Math.min(vw / W, vh / H);
+  cv.style.width = Math.floor(W * s) + 'px'; cv.style.height = Math.floor(H * s) + 'px';
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
+
+// ---------------------------------------------------------------- loop
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt); render();
+  requestAnimationFrame(frame);
+}
+buildBackground(); resize();
+setupLevel(1); bannerT = 0;       // attract-mode scene behind the title
+requestAnimationFrame(frame);
+
+// ---------------------------------------------------------------- public API (skins / testing)
+window.SnowCraft = {
+  SKINS, TEAMS, POSES,
+  /** setSkin('player'|'enemy', 'green' | 'red' | skinObject) */
+  setSkin(team, skin) {
+    if (typeof skin === 'object') { const key = skin.key || ('custom_' + team); SKINS[key] = skin; skin = key; }
+    if (!SKINS[skin]) throw new Error('Unknown skin ' + skin);
+    TEAMS[team] = skin; spriteCache.clear();
+  },
+  get state() { return { state, level, score, best, kids: kids.map(k => ({ team: k.team, x: k.x, y: k.y, state: k.state, hits: k.hits })), balls: balls.length }; },
+  debug: {
+    start: startGame,
+    level(n) { level = n; score = 0; setupLevel(n); setState('play'); },
+    koEnemies() { enemies().forEach(k => alive(k) && ko(k)); },
+    koPlayers() { players().forEach(k => alive(k) && ko(k)); },
+    step(sec) { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); render(); },
+  },
+};
+})();
+</script>
+</body>
+</html>
