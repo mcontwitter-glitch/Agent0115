@@ -85,7 +85,7 @@ const SKINS = {
 };
 // Which skin each side uses. Swap with SnowCraft.setSkin(team, skinKeyOrObject).
 const LF = window.LILFOOT_IMG || {};
-const LF_BASE = { spriteHeight: 58, suit:'#d71c1c', mitten:'#c41616', boots:'#2a34b8', pants:'#2a34b8', face:'#f6dcc4' };
+const LF_BASE = { spriteHeight: 71, suit:'#d71c1c', mitten:'#c41616', boots:'#2a34b8', pants:'#2a34b8', face:'#f6dcc4' }; // [Mau5 Oct 12, ref 377] trio 2.15x greens, ~19.7% field height
 SKINS.lf_crown   = { ...LF_BASE, label:'Lil Foot - Green Crown', sprites:{ stand: LF.crown } };
 SKINS.lf_hardhat = { ...LF_BASE, label:'Lil Foot - Hard Hat',    sprites:{ stand: LF.hardhat } };
 SKINS.lf_beanie  = { ...LF_BASE, label:'Lil Foot - Christ Is King', sprites:{ stand: LF.beanie } };
@@ -410,7 +410,7 @@ function update(dt) {
     let gone = false;
     for (const k of kids) {
       if (k.team === b.team || !alive(k)) continue;
-      const kh = kidH(k), hr = (kh > 40 ? 13 : 10) + (b.big ? 6 : 0);
+      const kh = kidH(k), hr = (kh > 40 ? kh * 0.224 : 10) + (b.big ? 6 : 0); // scaled w/ kid height (was 13 @ h58)
       const dx = k.x - b.x, dy = (k.y - b.y) * 1.5, hgt = k.state === 'sit' ? kh * 0.72 : kh;
       if (dx * dx + dy * dy < hr * hr && b.z < hgt) {
         if (b.big) k.hits = Math.max(k.hits, 1);           // power-up snowball: knocks out in one hit
@@ -648,7 +648,7 @@ function drawDecal(d) {
 
 // ---------------------------------------------------------------- HUD bits
 function drawRing(k) {
-  const x = k.x, y = k.y - 1, big = kidH(k) > 40, RX = big ? 21 : 15, RY = big ? 8.5 : 6.5;
+  const x = k.x, y = k.y - 1, big = kidH(k), RX = big > 40 ? big * 0.362 : 15, RY = big > 40 ? big * 0.147 : 6.5;
   ctx.save(); ctx.strokeStyle = 'rgba(40,104,160,0.9)'; ctx.lineWidth = 1.1;
   ctx.beginPath(); ctx.ellipse(x, y, RX, RY, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.fillStyle = 'rgba(40,104,160,0.9)';
@@ -659,7 +659,7 @@ function drawRing(k) {
   ctx.restore();
 }
 function drawPowerBar(k) {
-  const segs = 7, x = k.x + (kidH(k) > 40 ? 20 : 14), y0 = k.y - 6;
+  const segs = 7, kh2 = kidH(k), x = k.x + (kh2 > 40 ? kh2 * 0.345 : 14), y0 = k.y - 6;
   const n = Math.ceil(k.power * segs);
   for (let i = 0; i < segs; i++) {
     const y = y0 - i * 3.2;
@@ -848,7 +848,7 @@ function renderOver() {
 function toLogical(e) { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; }
 function kidAt(x, y, touch) {
   let bestK = null, bd0 = touch ? 26 : 17;
-  players().forEach(k => { if (!usable(k)) return; const h = kidH(k), bd = h > 40 ? bd0 + 8 : bd0;
+  players().forEach(k => { if (!usable(k)) return; const h = kidH(k), bd = (h > 40 ? (bd0 + 8) : bd0) * (h / 58); // pick radius scales with kid size
     const d = Math.hypot(k.x - x, (k.y - h * 0.42) - y); if (d < bd && (!bestK || d < bestK.d)) { bestK = { k, d }; } });
   return bestK && bestK.k;
 }
